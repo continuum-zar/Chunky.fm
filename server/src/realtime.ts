@@ -3,6 +3,7 @@ import { WebSocket, WebSocketServer } from 'ws'
 import type { AirSnapshot, OnAir } from './air.js'
 import { type ChatLog, RateLimit } from './chat.js'
 import type { PlayLog } from './history.js'
+import { DEFAULT_DUCK, type Mic, type MicSnapshot } from './mic.js'
 import type { PlaybackSnapshot } from './playback.js'
 import type { Mutes } from './mutes.js'
 import type { Padding } from './padding.js'
@@ -14,8 +15,11 @@ import {
   chatMessages,
   errorMessage,
   historyMessage,
+  micMessage,
   parseClientMessage,
   presenceMessage,
+  signalMessage,
+  youMessage,
   queueMessage,
   stateMessage,
   wishedMessage,
@@ -44,6 +48,12 @@ export interface RealtimeOptions {
    * behind it simply says there is nothing announced.
    */
   schedule?: Schedule
+  /**
+   * Whether somebody is talking over the music. Optional like `air`, and absent
+   * means a mic that is never open: a harness that is about the chat should not
+   * have to build one to hear itself think.
+   */
+  mic?: Mic
   /** Who has been asked to stop talking. Omit and nobody is muted. */
   mutes?: Mutes
   /**
@@ -82,6 +92,35 @@ export interface RealtimeOptions {
   wishBurst?: number
   /** How long one of those costs to earn back. */
   wishRefillMs?: number
+  /**
+   * Which upgrades are the decks.
+   *
+   * A predicate over the upgrade's headers, like `admit` beside it, and asked
+   * exactly once per connection. The admin cookie is already on the upgrade
+   * request, and `hasAdminCredentials` takes raw headers precisely so something
+   * that never becomes a `FastifyRequest` can ask the same question of the same
+   * code.
+   *
+   * This is the first thing the socket has ever known about who is on the other
+   * end, and it buys exactly one privilege: addressing a signalling frame to a
+   * listener. Everything else is still refused to an admin cookie the same way
+   * it is refused to nothing at all. Omit it and no socket is the decks, which
+   * is a station where nobody can offer anybody a voice — the right answer for
+   * every test that is about something else.
+   */
+  isAdmin?(headers: IncomingHttpHeaders): boolean
+  /**
+   * The last socket that was the decks has closed.
+   *
+   * Wired to the mic's lease in `app.ts` rather than reached for from in here,
+   * the way ending a session is: the socket layer knows a connection went away
+   * and should not also be deciding what that means for a broadcast.
+   */
+  onDecksGone?(): void
+  /** Signalling frames a listener may send back to back. */
+  signalBurst?: number
+  /** How long one of those costs to earn back. */
+  signalRefillMs?: number
   log?: RealtimeLogger
 }
 
@@ -93,8 +132,18 @@ export interface RealtimeHandle {
   close(): Promise<void>
 }
 
-/** Listeners only ever send tiny clock probes; anything larger is abuse. */
-const MAX_PAYLOAD_BYTES = 4 * 1024
+/**
+ * Frames were tiny until signalling arrived, and an SDP offer is not.
+ *
+ * A session description runs to a couple of kilobytes before it carries a
+ * single ICE candidate, and comfortably past four with them, so the old 4 KiB
+ * ceiling would have closed the socket (ws answers an oversized frame with a
+ * 1009 and a disconnection) at exactly the moment a voice was being set up —
+ * which reads as the station dropping for no reason. Candidates trickle
+ * separately, so nothing here is near the new ceiling; this is headroom for a
+ * description, not room for a payload.
+ */
+const MAX_PAYLOAD_BYTES = 16 * 1024
 const DEFAULT_HEARTBEAT_MS = 30_000
 const DEFAULT_CLOSE_GRACE_MS = 1_000
 /** A few lines in a row is how people talk; a stream of them is not. */
@@ -115,6 +164,19 @@ const DEFAULT_JOIN_REFILL_MS = 5_000
  */
 const DEFAULT_WISH_BURST = 3
 const DEFAULT_WISH_REFILL_MS = 30_000
+/**
+ * Looser than anything a person types, because this is a machine answering.
+ *
+ * Setting up one voice is an answer and then a dribble of ICE candidates, a
+ * dozen or two, as fast as the browser finds them. The bucket is here for the
+ * same reason the chat's is — nothing a single anonymous socket sends should
+ * turn into unbounded work — and it has to leave a legitimate negotiation
+ * completely untouched, or it becomes a listener who cannot be heard.
+ *
+ * The decks are exempt; see `signal`.
+ */
+const DEFAULT_SIGNAL_BURST = 40
+const DEFAULT_SIGNAL_REFILL_MS = 500
 
 function send(socket: WebSocket, message: ServerMessage): void {
   if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message))
@@ -124,14 +186,33 @@ function send(socket: WebSocket, message: ServerMessage): void {
 const ALWAYS_ON: AirSnapshot = { live: true, since: null }
 
 /**
+ * What a station with no `mic` reports: nobody talking, and the depth the
+ * console would start at anyway.
+ *
+ * `duckTo` is a real value rather than a null, because it is the answer to
+ * "how far would the music drop", which has one whether or not this station
+ * can ask it. A client is spared a special case it would only ever resolve to
+ * the same number.
+ */
+const SHUT: MicSnapshot = { live: false, duckTo: DEFAULT_DUCK, since: null }
+
+/**
  * Attaches the station's websocket surface to an existing HTTP server.
  *
- * Connections are read-only, and that *is* the socket's half of the admin gate:
- * there is no privileged frame here to authenticate, because every mutation
- * lives behind `requireAdmin` on an HTTP route. A socket that carries a valid
- * admin cookie gets no more than one that carries nothing. Command-shaped
- * frames are refused by name (see `parseClientMessage`), so the only way to
- * drive the station is a request that went through the gate.
+ * Connections drive nothing, and that *is* the socket's half of the admin gate:
+ * every mutation lives behind `requireAdmin` on an HTTP route, and
+ * command-shaped frames are refused by name (see `parseClientMessage`), so the
+ * only way to move the station is a request that went through the gate.
+ *
+ * Signalling is the one thing here that reads an admin cookie, and it is worth
+ * being exact about what that does and does not change. It is not a command: an
+ * offer mutates nothing, plays nothing and is not even read by this process,
+ * which relays it the same way it relays no audio. What it is, is *addressed* —
+ * the decks may reach a listener and a listener may only reach the decks — and
+ * an address book needs to know which connection is which. So the socket now
+ * asks, once, on the upgrade, and the answer buys exactly that one privilege.
+ * A socket carrying the password still cannot skip a track, read the wish book
+ * or go on air over this connection.
  *
  * A socket may name itself, and that is the whole of identity here: a nickname
  * held in memory for as long as the socket lasts, which buys a row in the
@@ -142,6 +223,7 @@ export function attachRealtime({
   station,
   air,
   schedule,
+  mic,
   mutes,
   padding,
   chat,
@@ -157,6 +239,10 @@ export function attachRealtime({
   joinRefillMs = DEFAULT_JOIN_REFILL_MS,
   wishBurst = DEFAULT_WISH_BURST,
   wishRefillMs = DEFAULT_WISH_REFILL_MS,
+  isAdmin,
+  onDecksGone,
+  signalBurst = DEFAULT_SIGNAL_BURST,
+  signalRefillMs = DEFAULT_SIGNAL_REFILL_MS,
   log,
 }: RealtimeOptions): RealtimeHandle {
   const { playback, queue } = station
@@ -165,6 +251,7 @@ export function attachRealtime({
   // refused everything without one would make them.
   const onAir = (): boolean => air?.live ?? true
   const airSnapshot = (): AirSnapshot => air?.snapshot() ?? ALWAYS_ON
+  const micSnapshot = (): MicSnapshot => mic?.snapshot() ?? SHUT
   const wss = new WebSocketServer({
     server,
     path,
@@ -185,6 +272,16 @@ export function attachRealtime({
   // listener who reconnects is a new row, which is what "left and came back"
   // should look like.
   let nextListenerId = 1
+  /**
+   * Every open socket by its id, and which of them are the decks.
+   *
+   * The roster cannot do this job: `Presence` holds only sockets that have
+   * named themselves, and a signalling frame has to reach a console that never
+   * did. These are about connections rather than about people, which is why
+   * they are kept apart from the roster rather than folded into it.
+   */
+  const socketsById = new Map<number, WebSocket>()
+  const deckSockets = new Set<number>()
   // Set once shutdown starts, and read by the roster broadcast below.
   let draining = false
 
@@ -324,16 +421,71 @@ export function attachRealtime({
     if (presence.join(listenerId, nickname)) broadcastPresence()
   }
 
-  wss.on('connection', (socket) => {
+  /**
+   * Carries one end of a negotiation to the other, without reading it.
+   *
+   * The station has no opinion about SDP and never will; what it owns is the
+   * address book and the one rule on it. The decks may reach any socket, which
+   * is what fanning a voice out is. A listener may reach the decks and nobody
+   * else: two listeners have no business negotiating, and a socket that could
+   * reach any other by id would be a way to make the station introduce
+   * strangers to each other.
+   *
+   * `from` is stamped here rather than carried by the sender, for the reason a
+   * chat message's author is looked up rather than taken from the frame: a
+   * frame that named its own origin would let a listener pose as the decks and
+   * offer somebody a microphone.
+   */
+  function signal(socket: WebSocket, senderId: number, limit: RateLimit, to: number, payload: unknown): void {
+    const fromDecks = deckSockets.has(senderId)
+    if (!fromDecks && !deckSockets.has(to)) {
+      // Refused rather than dropped: a client that has this wrong is waiting on
+      // an answer that is never coming, and silence is the one response it
+      // cannot tell from a slow network.
+      send(socket, errorMessage('not_the_decks', 'listeners may only signal the decks', 'signal'))
+      return
+    }
+    // The decks are exempt from pacing, and this is the one place that matters:
+    // fanning a voice out to a full room is one offer and a dribble of
+    // candidates per listener, all at once, which is exactly the shape a bucket
+    // sized for one person typing would refuse. Whoever is sending it already
+    // holds the password.
+    if (!fromDecks && !limit.take()) {
+      send(socket, errorMessage('slow_down', 'slow down', 'signal'))
+      return
+    }
+
+    const peer = socketsById.get(to)
+    if (!peer) {
+      // Ordinary rather than exceptional: a listener who closed the tab between
+      // the roster going out and the offer being written.
+      send(socket, errorMessage('no_such_peer', 'nobody is listening on that id', 'signal'))
+      return
+    }
+    send(peer, signalMessage(senderId, payload))
+  }
+
+  wss.on('connection', (socket, request) => {
     responsive.add(socket)
     const listenerId = nextListenerId++
     listenerIds.set(socket, listenerId)
+    socketsById.set(listenerId, socket)
+    // Asked once, on the way in, and never again: the cookie was on the
+    // upgrade, and a socket does not get to change its mind about who it is
+    // halfway through an evening.
+    if (isAdmin?.(request.headers)) deckSockets.add(listenerId)
     // Per socket, not per listener: the thing being paced is a connection, and
     // a bucket that outlived one would have to be cleaned up after sockets that
     // never come back.
     const chatLimit = new RateLimit({ burst: chatBurst, refillMs: chatRefillMs })
     const joinLimit = new RateLimit({ burst: joinBurst, refillMs: joinRefillMs })
     const wishLimit = new RateLimit({ burst: wishBurst, refillMs: wishRefillMs })
+    const signalLimit = new RateLimit({ burst: signalBurst, refillMs: signalRefillMs })
+
+    // First of all, and about this socket rather than about the station: an
+    // offer is addressed to an id, and both ends need to know which id is
+    // theirs before any of the rest of this means anything. See `YouMessage`.
+    send(socket, youMessage(listenerId))
 
     // Whether there is a broadcast at all comes before what is on it: a page
     // told the decks are empty without being told the station is off air would
@@ -343,6 +495,11 @@ export function attachRealtime({
     // sentence on the off-air screen, and a page that got the first without the
     // second would draw "off the air" and then replace it a frame later.
     send(socket, scheduleMessage(schedule?.get() ?? null))
+    // Before the music, so a listener arriving mid-break comes in already
+    // ducked. The other way round, the first thing they would hear is half a
+    // second of a song at full volume under somebody's voice, corrected a
+    // frame later, which is a worse arrival than a quiet one.
+    send(socket, micMessage(micSnapshot()))
     // Drop straight into the moment: the snapshot alone is enough to align.
     send(socket, stateMessage(playback.snapshot()))
     send(socket, queueMessage(queue.list()))
@@ -373,12 +530,23 @@ export function attachRealtime({
       if (message.type === 'join') join(socket, listenerId, joinLimit, message.nickname)
       if (message.type === 'say') say(socket, listenerId, chatLimit, message.text)
       if (message.type === 'wish') wish(socket, listenerId, wishLimit, message.text)
+      if (message.type === 'signal') {
+        signal(socket, listenerId, signalLimit, message.to, message.payload)
+      }
     })
 
     // Every way a socket can end arrives here: a tab closing, a network that
     // vanished and was terminated by the heartbeat, a shutdown. So this is the
     // only place a listener needs to be taken off the roster.
     socket.on('close', () => {
+      socketsById.delete(listenerId)
+      // Only on the way to none, and only when this socket was one of them: a
+      // console with two tabs open still has decks after one of them closes.
+      // Not during a shutdown either, where every socket is on its way out and
+      // the station is not going to be talking over anything.
+      if (deckSockets.delete(listenerId) && deckSockets.size === 0 && !draining) {
+        onDecksGone?.()
+      }
       if (presence.leave(listenerId)) broadcastPresence()
     })
 
@@ -417,6 +585,13 @@ export function attachRealtime({
       broadcast(historyMessage([]))
     }
   }
+  const onMicChange = (snapshot: MicSnapshot) => {
+    log?.info(
+      { live: snapshot.live, duckTo: snapshot.duckTo, listeners: wss.clients.size },
+      'broadcasting mic state',
+    )
+    broadcast(micMessage(snapshot))
+  }
   const onScheduleChange = (next: ScheduledSession | null) => {
     log?.info({ announced: next !== null, listeners: wss.clients.size }, 'broadcasting schedule')
     broadcast(scheduleMessage(next))
@@ -429,6 +604,7 @@ export function attachRealtime({
 
   air?.on('change', onAirChange)
   schedule?.on('change', onScheduleChange)
+  mic?.on('change', onMicChange)
   padding?.on('change', onPaddingChange)
 
   const onQueueChange = (entries: QueueEntry[]) => {
@@ -461,6 +637,7 @@ export function attachRealtime({
     queue.off('change', onQueueChange)
     air?.off('change', onAirChange)
     schedule?.off('change', onScheduleChange)
+    mic?.off('change', onMicChange)
     padding?.off('change', onPaddingChange)
 
     const sockets = [...wss.clients]

@@ -284,11 +284,17 @@ describe('what a listener is told', () => {
   })
   afterEach(() => harness.cleanup())
 
-  it('is told on connect, before anything else', async () => {
+  it('is the first thing said about the station', async () => {
+    // Second overall, and only because `you` comes first: that one is about the
+    // socket rather than about the station, and both ends of a signalling
+    // exchange need their own id before anything else means anything. Of the
+    // frames describing the station, this is still ahead of all of them — a
+    // page told the decks are empty without being told the station is off air
+    // shows a gap between songs that never ends.
     const client = await TestClient.connect(harness.wsUrl)
     const air = await client.nextAir()
     expect(air).toMatchObject({ type: 'air', live: false })
-    expect(client.seen[0]?.type).toBe('air')
+    expect(client.seen.map((m) => m.type).slice(0, 2)).toEqual(['you', 'air'])
     await client.close()
   })
 

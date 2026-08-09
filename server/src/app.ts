@@ -9,12 +9,15 @@ import { registerErrorHandlers } from './lib/errors.js'
 import { emptyLibrary } from './lib/library.js'
 import { ensureStorageDirs } from './lib/storage.js'
 import { LyricsService } from './lyrics.js'
+import { MIC_HURRY_MS, Mic } from './mic.js'
 import { Mutes } from './mutes.js'
 import { Padding } from './padding.js'
 import { PlaybackState } from './playback.js'
 import { type RealtimeHandle, attachRealtime } from './realtime.js'
-import { mayListen } from './lib/auth.js'
+import { hasAdminCredentials, mayListen } from './lib/auth.js'
 import { adminRoutes } from './routes/admin.js'
+import { micRoutes } from './routes/mic.js'
+import { rtcRoutes } from './routes/rtc.js'
 import { mutesRoutes } from './routes/mutes.js'
 import { paddingRoutes } from './routes/padding.js'
 import { sessionRoutes } from './routes/session.js'
@@ -44,11 +47,20 @@ declare module 'fastify' {
     /** The next session, announced. Outlives every session; see `Schedule`. */
     schedule: Schedule
     mutes: Mutes
+    /** Whether somebody is talking over the music. See `Mic`. */
+    mic: Mic
     /** Heads the decks added to the headcount. See `Padding`. */
     padding: Padding
     lyrics: LyricsService
   }
 }
+
+/**
+ * How often a lapsed mic is noticed. Slow enough to be free, fast enough that
+ * a console that died mid-sentence is a pause rather than the rest of the
+ * evening. See `Mic.sweep`.
+ */
+const DEFAULT_MIC_SWEEP_MS = 2_000
 
 export interface BuildAppOptions {
   config: Config
@@ -58,6 +70,10 @@ export interface BuildAppOptions {
   playback?: PlaybackState
   heartbeatIntervalMs?: number
   backstopIntervalMs?: number
+  /** How often a mic nobody is renewing is checked for having lapsed. */
+  micSweepIntervalMs?: number
+  /** How long an open mic lasts without a renew. See `MIC_LEASE_MS`. */
+  micLeaseMs?: number
   closeGraceMs?: number
   chatHistoryLimit?: number
   playHistoryLimit?: number
@@ -69,6 +85,9 @@ export interface BuildAppOptions {
   joinRefillMs?: number
   wishBurst?: number
   wishRefillMs?: number
+  /** Signalling frames a listener may send back to back. The decks are exempt. */
+  signalBurst?: number
+  signalRefillMs?: number
   signInBurst?: number
   signInRefillMs?: number
   /** The seam tests mock LRCLIB through; production reaches the real archive. */
@@ -82,6 +101,8 @@ export async function buildApp({
   playback = new PlaybackState(),
   heartbeatIntervalMs,
   backstopIntervalMs,
+  micSweepIntervalMs = DEFAULT_MIC_SWEEP_MS,
+  micLeaseMs,
   closeGraceMs,
   chatHistoryLimit,
   playHistoryLimit,
@@ -92,6 +113,8 @@ export async function buildApp({
   joinRefillMs,
   wishBurst,
   wishRefillMs,
+  signalBurst,
+  signalRefillMs,
   signInBurst,
   signInRefillMs,
   lyricsFetch,
@@ -175,6 +198,18 @@ export async function buildApp({
   // back up never goes on claiming a crowd from a night that is over.
   const padding = new Padding()
 
+  // The talkback. It holds no audio and never will: what it carries is whether
+  // somebody is talking and how far the music should sit under them, and every
+  // listener applies that to the copy of the track their own browser is already
+  // playing. Stamped from the station clock, like everything else time-shaped
+  // here, because the lease below is measured against it.
+  const mic = new Mic({ now: () => playback.now(), leaseMs: micLeaseMs })
+
+  // A console that dies mid-sentence would otherwise leave the whole room
+  // listening to a permanently quiet song. See `Mic.sweep`.
+  const micSweep = setInterval(() => mic.sweep(), micSweepIntervalMs)
+  micSweep.unref()
+
   // Deliberately not wired to the air change below. Everything else in this
   // file is about tonight and goes when tonight does; an announcement is about
   // a night that has not happened, and ending a broadcast is usually the moment
@@ -189,6 +224,10 @@ export async function buildApp({
     station.queue.clear()
     mutes.clear()
     padding.clear()
+    // Nobody is talking over a station that is off. Only the mic itself: the
+    // duck depth is a fader position belonging to whoever runs the decks, not
+    // a claim about tonight's room, so it survives. See `Mic.clear`.
+    mic.clear()
     // And everything written down during it. Scoping already made all three
     // unreadable; this is about the rows. The chat and the book are free text
     // somebody typed, signed with the name they were using, said to a room that
@@ -215,6 +254,8 @@ export async function buildApp({
   await app.register(adminRoutes({ config, signInBurst, signInRefillMs }))
   await app.register(sessionRoutes({ config, air }))
   await app.register(scheduleRoutes({ config, schedule }))
+  await app.register(micRoutes({ config, mic, air }))
+  await app.register(rtcRoutes({ config }))
   await app.register(mutesRoutes({ config, mutes }))
   await app.register(paddingRoutes({ config, padding }))
   await app.register(listenRoutes({ config }))
@@ -234,11 +275,21 @@ export async function buildApp({
     station,
     air,
     schedule,
+    mic,
     mutes,
     padding,
     // The socket is the station: refusing it is what makes a private station
     // private, since everything a listener sees arrives on it.
     admit: (headers) => mayListen(config, headers),
+    // And which of the admitted are the decks. The same question `requireAdmin`
+    // asks of an HTTP request, asked of the upgrade that became this socket,
+    // and it buys one thing only: the right to offer a listener a voice.
+    isAdmin: (headers) => hasAdminCredentials(config, headers),
+    // The console's socket going away is not proof it has gone: renewals ride
+    // HTTP, which survives a blip the socket does not. So this shortens the
+    // mic's lease rather than ending it, and a console that is only
+    // reconnecting keeps its mic. See `Mic.hurry`.
+    onDecksGone: () => mic.hurry(MIC_HURRY_MS),
     chat,
     wishes,
     plays,
@@ -250,6 +301,8 @@ export async function buildApp({
     joinRefillMs,
     wishBurst,
     wishRefillMs,
+    signalBurst,
+    signalRefillMs,
     log: app.log,
   })
 
@@ -262,6 +315,7 @@ export async function buildApp({
   app.decorate('air', air)
   app.decorate('schedule', schedule)
   app.decorate('mutes', mutes)
+  app.decorate('mic', mic)
   app.decorate('padding', padding)
   app.decorate('lyrics', lyrics)
 
@@ -270,6 +324,7 @@ export async function buildApp({
   // onClose here deadlocks shutdown for as long as anyone is listening.
   app.addHook('preClose', async () => {
     station.close()
+    clearInterval(micSweep)
     await realtime.close()
     // A session left open by a stop keeps a null `ended_at`, which reads as
     // "still on air" forever. Closed quietly: the sockets are already drained,

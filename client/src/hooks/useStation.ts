@@ -6,6 +6,7 @@ import type {
   AirSnapshot,
   ChatMessage,
   Listener,
+  MicSnapshot,
   Play,
   PlaybackSnapshot,
   QueueEntry,
@@ -45,12 +46,31 @@ export interface Station {
    */
   air: AirSnapshot | null
   /**
+   * This socket's own id, or null before the first frame arrives.
+   *
+   * Needed only by the voice, and needed by both ends of it: the decks must not
+   * offer themselves a microphone, and a listener answering an offer has to
+   * know the id it is reading is somebody else's. It changes on every reconnect,
+   * because a reconnect is a new socket and therefore a new row in the roster.
+   */
+  me: number | null
+  /**
    * When the station is next on, or null when nothing is announced.
    *
    * The other half of the sentence `air` starts, and the one thing here that
    * is not about tonight. See `ScheduleMessage`.
    */
   schedule: ScheduledSession | null
+  /**
+   * Whether somebody is talking over the music, and how far it drops while
+   * they are. Null until the first `mic` frame, which arrives in the connect
+   * burst before `state`, so the gap is a few milliseconds.
+   *
+   * Beside `air` rather than folded into `state` for the reason the queue is
+   * beside it: this changes twice a sentence and playback does not, and a page
+   * should not re-align its audio because somebody drew breath.
+   */
+  mic: MicSnapshot | null
   /** What's coming up. Null until the first queue frame arrives. */
   queue: QueueEntry[] | null
   /** Who else is here. Null until the first roster arrives. */
@@ -113,6 +133,13 @@ export interface Station {
   applyAir(snapshot: AirSnapshot): void
   /** Fold in what `PUT /api/schedule` just answered. See `applyState`. */
   applySchedule(next: ScheduledSession | null): void
+  /**
+   * Fold in what `POST /api/mic` just answered. See `applyState`, and note that
+   * this one earns it more than the others: the talk button is held down, and a
+   * console whose own duck waited for the round trip would hear the music drop
+   * after it had already started talking.
+   */
+  applyMic(snapshot: MicSnapshot): void
 }
 
 /** Holds the websocket open and tracks the station's broadcast state. */
@@ -124,7 +151,9 @@ export function useStation(
   const [reach, setReach] = useState<Availability>(INITIALLY)
   const [state, setState] = useState<StateMessage | null>(null)
   const [air, setAir] = useState<AirSnapshot | null>(null)
+  const [me, setMe] = useState<number | null>(null)
   const [schedule, setSchedule] = useState<ScheduledSession | null>(null)
+  const [mic, setMic] = useState<MicSnapshot | null>(null)
   const [queue, setQueue] = useState<QueueEntry[] | null>(null)
   const [listeners, setListeners] = useState<Listener[] | null>(null)
   const [padding, setPadding] = useState(0)
@@ -147,6 +176,11 @@ export function useStation(
     setAir(null)
     // And its own next evening.
     setSchedule(null)
+    // And its own answer to whether anybody is talking over it.
+    setMic(null)
+    // A new socket is a new row in the roster, so whatever this page was called
+    // on the last one says nothing about what it is called on this one.
+    setMe(null)
     const station = new StationConnection({
       url,
       onStatus: (next) => {
@@ -154,9 +188,13 @@ export function useStation(
         setReach((current) => nextAvailability(current, next))
       },
       onMessage: (message) => {
+        if (message.type === 'you') setMe(message.id)
         if (message.type === 'state') setState(message)
         if (message.type === 'air') setAir({ live: message.live, since: message.since })
         if (message.type === 'schedule') setSchedule(message.schedule)
+        if (message.type === 'mic') {
+          setMic({ live: message.live, duckTo: message.duckTo, since: message.since })
+        }
         if (message.type === 'queue') setQueue(message.entries)
         if (message.type === 'presence') {
           setListeners(message.listeners)
@@ -209,6 +247,7 @@ export function useStation(
    * console should not sit unchanged for a round trip.
    */
   const applySchedule = useCallback((next: ScheduledSession | null) => setSchedule(next), [])
+  const applyMic = useCallback((snapshot: MicSnapshot) => setMic(snapshot), [])
   const clearSocketError = useCallback(() => setSocketError(null), [])
 
   return {
@@ -216,7 +255,9 @@ export function useStation(
     reach,
     state,
     air,
+    me,
     schedule,
+    mic,
     queue,
     listeners,
     padding,
@@ -231,5 +272,6 @@ export function useStation(
     applyPadding,
     applyAir,
     applySchedule,
+    applyMic,
   }
 }

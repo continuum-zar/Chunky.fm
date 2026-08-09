@@ -99,12 +99,17 @@ describe('the socket, over a real connection', () => {
     await harness.cleanup()
   })
 
-  it('opens with the whole room: air, schedule, state, queue, roster, history, chat', async () => {
+  it('opens with the whole room: you, air, schedule, mic, state, queue, roster, history, chat', async () => {
     for (let i = 0; i < 5; i++) {
       const client = await TestClient.connect(harness.wsUrl)
-      await client.nextChat() // the last of the seven
+      await client.nextChat() // the last of the nine
       expect(client.seen.map((m) => m.type)).toEqual([
-        // First, and deliberately: whether there is a broadcast at all comes
+        // Who this socket is, before anything about the station: an offer is
+        // addressed to an id, and both ends of one need to know which id is
+        // theirs. It is also the only frame here about the socket rather than
+        // about the room, which is why it is not among the rest.
+        'you',
+        // Then, deliberately: whether there is a broadcast at all comes
         // before what is on it. A page told the decks are empty without being
         // told the station is off air shows a gap between songs that never ends.
         'air',
@@ -112,6 +117,10 @@ describe('the socket, over a real connection', () => {
         // sentence on the off-air screen, so they arrive together or the page
         // draws "off the air" and replaces it a frame later.
         'schedule',
+        // Before the music, so a listener arriving mid-break comes in already
+        // ducked. The other way round, the first thing they hear is half a
+        // second of a song at full volume under somebody's voice.
+        'mic',
         'state',
         'queue',
         'presence',

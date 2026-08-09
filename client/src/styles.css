@@ -2511,6 +2511,320 @@ h2 {
   color: var(--faint);
 }
 
+/* --- the mic ---------------------------------------------------------------
+ *
+ * The only control on the console that is held rather than clicked, and it is
+ * drawn to be found without looking: the widest target on the panel, at the top
+ * of the stack, wearing the one colour this design reserves for being live.
+ *
+ * That colour is not a second bright thing. Red means "on the air right now",
+ * and a hot mic is the most literal case of it the station has.
+ */
+
+.card--mic {
+  padding-bottom: 16px;
+}
+
+.mic__lamp {
+  padding: 4px 10px;
+  border-radius: var(--pill);
+  background: var(--raised);
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.mic__lamp--live {
+  background: var(--live-wash);
+  box-shadow: inset 0 0 0 1px rgb(251 44 54 / 30%);
+  color: var(--live-text);
+}
+
+/* Above the button it warns about, because it has to be read before the first
+   press rather than after it. Warm rather than alarming: nothing is wrong yet. */
+.mic__warn {
+  margin: 0;
+  padding: 12px 16px 0;
+  color: var(--warn);
+  font-size: 11px;
+  line-height: 16.5px;
+}
+
+.mic__controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px 0;
+}
+
+.mic__talk {
+  flex: 1;
+  height: 44px;
+  font-weight: 600;
+  /* No transition on the background. This button's whole job is to say whether
+     the mic is open, and a colour that eases into it would be reporting the
+     answer late. */
+}
+
+.mic__talk--live {
+  background: var(--live);
+  color: var(--fg);
+}
+
+.mic__talk--live:hover:not(:disabled) {
+  background: var(--live-text);
+}
+
+.mic__latch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+/* The meter.
+ *
+ * A scaled bar rather than a width, because this is repainted on every
+ * animation frame for as long as the mic is open: a transform is composited
+ * and a width is a layout, and one of those costs the whole console a reflow
+ * sixty times a second. Nothing here is set from React for the same reason —
+ * see `useMicInput`, which writes straight to the node. */
+.mic__meter {
+  height: 6px;
+  margin: 12px 16px 0;
+  border-radius: var(--pill);
+  background: var(--raised);
+  overflow: hidden;
+}
+
+.mic__meter-fill {
+  width: 100%;
+  height: 100%;
+  border-radius: var(--pill);
+  background: var(--ok);
+  transform: scaleX(0);
+  transform-origin: left center;
+  /* No transition: the ballistics are in the numbers (fast attack, slow
+     release, see nextLevel) and a CSS ease on top would be a second set of
+     them, fighting the first and lagging the voice. */
+}
+
+/* Against the rails. Red is the station's "live" colour and this is the one
+   place it means something else, which it gets away with by being a bar that
+   is already moving: nothing else on the page can be mistaken for it. */
+.mic__meter-fill[data-clip='true'] {
+  background: var(--live);
+}
+
+.mic__hint {
+  margin: 8px 0 0;
+  padding: 0 16px;
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 16.5px;
+}
+
+/* Who can actually hear the mic.
+ *
+ * Quiet by default, because the answer is usually "everyone" and a panel that
+ * shouted it would be shouting all evening. The colour is on the dots alone,
+ * so the eye finds a problem without the list ever becoming loud. */
+.reach {
+  margin-top: 10px;
+  padding: 0 16px;
+}
+
+.reach__none,
+.reach__summary {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 16.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.reach__none {
+  padding: 6px 16px 0;
+}
+
+.reach__list {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  /* Long enough to read a room at a glance, capped so a full house does not
+     push the queue off the screen. */
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.reach__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 11px;
+  line-height: 16.5px;
+}
+
+.reach__who {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-dim);
+}
+
+.reach__state {
+  color: var(--faint);
+}
+
+.reach__dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--pill);
+  background: var(--faint);
+}
+
+/* Green is "the socket is open" everywhere else on this station, and it means
+   the same thing here: a path that exists and is carrying something. */
+.reach__dot--good {
+  background: var(--ok);
+}
+
+.reach__dot--wait {
+  background: var(--warn);
+}
+
+/* Not --live. Red on this station means "on the air right now", and a listener
+   who cannot be reached is the opposite of that; borrowing the on-air colour
+   for a fault would make the one thing red is reserved for ambiguous. */
+.reach__dot--bad {
+  background: var(--warn);
+  box-shadow: 0 0 0 2px rgb(255 138 101 / 25%);
+}
+
+.mic__duck {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 16px 16px 0;
+}
+
+.mic__duck-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+/* The reading is a number being watched while a fader moves, so it is tabular
+   and not italic despite the tag: digits that change width make it jitter. */
+.mic__duck-label em {
+  color: var(--fg-dim);
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+.mic__duck input {
+  width: 100%;
+  accent-color: var(--fg);
+}
+
+/* The sound check: the microphone itself, which at this stage reaches a meter
+   and a pair of headphones and nothing else. Ruled off from the controls above
+   because those drive the broadcast and these only describe this machine. */
+.soundcheck {
+  margin-top: 16px;
+  padding: 12px 16px 0;
+  border-top: 0.8px solid rgb(255 255 255 / 5%);
+}
+
+.soundcheck__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.soundcheck__title {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+}
+
+.soundcheck__power {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 11px;
+}
+
+.soundcheck__error {
+  margin: 8px 0 0;
+  color: var(--warn);
+  font-size: 11px;
+  line-height: 16.5px;
+}
+
+.soundcheck__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.soundcheck__row select {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 6px;
+  border: none;
+  border-radius: 8px;
+  background: var(--raised);
+  box-shadow: var(--ring);
+  color: var(--fg-dim);
+  font: inherit;
+}
+
+.soundcheck__check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+/* Why a box is greyed out, beside the box rather than in a note underneath it:
+   a disabled control with its reason two lines away reads as broken. */
+.soundcheck__why {
+  color: var(--faint);
+  font-style: normal;
+}
+
+.soundcheck__note {
+  margin: 10px 0 0;
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 16.5px;
+}
+
 /* --- the room, from the other side -----------------------------------------
  *
  * Read-only. The console never tunes in, so it is not in the room and the

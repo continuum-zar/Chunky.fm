@@ -711,6 +711,221 @@ doors is the ordinary way to start an evening.
 While off air, `say`, `wish` and `vote_skip` are all refused with `off_air`:
 there is no session for any of them to belong to.
 
+### Talking over the music
+
+| | |
+|---|---|
+| `GET /api/mic` | Open. `{live, duckTo, since}`: whether somebody is talking, and how far the music sits under them. |
+| `POST /api/mic` | Admin. `{action: 'open'\|'renew'\|'close'}`, or `{action: 'duck', duckTo}` → the state it produced. |
+
+PLAN.md's last deferred line was "mic / talk-over-the-music DJ mode". This is
+the half of it that carries no sound, and it is worth being plain about why
+that half exists on its own.
+
+**The station does not mix.** Nothing about the music passes through this
+server: it broadcasts `{track, startedAt, pausedAt}` and every listener's
+browser plays the file itself, aligned by clock. So there is no fader here to
+move. What there is instead is a frame — the mic is open, the music should sit
+this far down — and thirty browsers turning down the copy they are each already
+playing, on the clock they already share.
+
+That makes the ducking *better* than a mixed stream's rather than a compromise:
+it lands everywhere at the same instant, it costs the server nothing, and it
+works for a listener whose voice connection has failed or does not exist yet.
+Which is the point — this ships before any voice does, and the whole experience
+of a mic break is testable without a microphone.
+
+`duckTo` is a linear gain, clamped to `[0.05, 1]`. The floor is deliberately
+not silence: a duck to nothing is a pause, and there is already a button for
+that, but more practically a listener who cannot hear the bed has no way to
+tell a mic break from the station having died. The default is `0.2`, about
+−14 dB. It is a fader and it is meant to be moved mid-sentence, which is when
+you can hear the bed is too loud under you.
+
+The `mic` frame is sent on connect **before** `state`, and the ordering is
+load-bearing: a page told what is playing before it is told to duck puts half a
+second of a song at full volume under somebody's voice and then corrects
+itself, which is a worse arrival than a quiet one.
+
+**`renew` is deliberately not `open`.** An open mic holds a ten-second lease and
+the console beats every three seconds while the key is held. Without the lease,
+a tab that died mid-sentence would leave the station believing somebody was
+talking and every listener sitting through a permanently quiet song — the same
+class of bug as a session left open by a crash reading as "still on air"
+forever. Without the *separate verb*, a keep-alive still in flight when the key
+came up would reopen the mic behind whoever had just stopped talking.
+
+Opening the mic is refused off air with `off_air`, like `say` and `wish`: there
+is no broadcast to talk over. Moving the fader is not, because setting up before
+the doors open is ordinary and a depth is not a claim about a broadcast.
+
+Ending a session takes the mic with it and **keeps the depth**. The distinction
+is the one the rest of this page turns on: mutes and padding are claims about
+tonight's room and would be lies applied to another night, while the duck depth
+is a fader position belonging to whoever runs the decks. A mute set in October
+reappearing next Saturday is a bug; your own duck depth is a setting.
+
+Like every other mutation this goes over HTTP, and `mic` is refused by name on
+the socket — however live it feels, and that feeling is exactly what the rule
+exists to resist.
+
+On the client the gain stage is built lazily, inside the join click. Routing an
+element through Web Audio is permanent and total, and a context that has never
+been resumed is not quiet music but *no* music, so the graph is only ever made
+at the moment there is a gesture to spend on waking it. See
+`client/src/lib/audio-graph.ts`, and `docs/broadcasting.md` for where the voice
+itself goes next.
+
+#### The voice
+
+| | |
+|---|---|
+| `GET /api/rtc` | Listener. `{iceServers}`: how to reach another browser. |
+| `signal` (socket, both ways) | Relayed, not read. The decks may address any socket; a listener may address only the decks. |
+
+The voice is WebRTC, peer-to-peer, and it does not touch this server. One
+`RTCPeerConnection` per listener, Opus mono capped at 32 kbps, so a room of
+thirty is about a megabit off the console's uplink and nothing at all off the
+station's. The music is still a file each listener plays themselves on the
+station's clock; the only thing that travels live is somebody talking.
+
+**What the server owns is the address book.** It relays offers, answers and ICE
+candidates without reading any of them — `payload` is opaque, and a station that
+validated SDP would be a station with an opinion about WebRTC versions it has no
+way to keep current. What it does decide is who may say what to whom:
+
+- The decks may address any socket. That is what fanning a voice out is.
+- A listener may address the decks and nobody else. Two listeners have no
+  business negotiating, and a socket that could reach any other by id would be a
+  way to make the station introduce strangers.
+- `from` is stamped by the server, never carried by the sender — the same rule
+  that makes a chat message's author the roster's answer rather than the
+  frame's. Without it a listener could pose as the decks and offer somebody a
+  microphone.
+
+This is the one place the socket's read-only rule bends, and it bends narrowly.
+Signalling is not a command: it mutates nothing, plays nothing, and is not even
+read by this process. But it *is* addressed, and an address book has to know
+which connection is which — so the socket now asks `hasAdminCredentials` of the
+upgrade headers, once, and the answer buys exactly that one privilege. A socket
+carrying the password still cannot skip a track or go on air over it.
+
+Every socket is told its own id in a `you` frame, before anything about the
+station. Both ends need it: the decks must know which id *not* to offer to,
+since whoever runs the station is usually tuned in as well, and a listener
+answering an offer has to know the id it read is somebody else's.
+
+Two things about this bit up front, because both cost an afternoon otherwise:
+
+- **`MAX_PAYLOAD_BYTES` was 4 KiB and an SDP description does not fit.** The
+  failure was not a refusal but a disconnection — `ws` answers an oversized
+  frame by closing the socket — so it looked like the station dropping for no
+  reason at exactly the moment somebody tried to speak. It is 16 KiB now, and
+  candidates trickle separately so nothing goes near it.
+- **A remote stream connected only to Web Audio is silent in Chrome.** The
+  stream is also parked on a hidden muted `<audio>` element, which is what
+  starts the decoder; the audible path is still the graph, because a listener
+  who joined at nine has no gesture left to spend on a `play()` at twenty to
+  ten. It works perfectly in testing either way, because whoever is testing
+  clicked something a moment ago.
+
+The connections are held open for as long as the microphone is, not for as long
+as somebody is talking. Negotiating takes a second or two, and doing it on the
+talk button would lose the beginning of every break — the part with the greeting
+in it. What opens and closes with the button is a gain node, which is instant,
+and it is driven by the *broadcast* mic state rather than the local button so
+the first word never lands before everyone's music has got out of its way.
+
+`GET /api/rtc` exists rather than a constant in the bundle because of the TURN
+credential: a relay password in a JavaScript file is a relay anybody who loads
+the page can spend, from anywhere. It sits behind the listener gate, because
+both ends of a voice need it.
+
+**A failed connection is rebuilt, twice, then given up on.** Not an ICE restart:
+there is no transport state worth preserving here, and a listener answering a
+fresh offer on a fresh connection is a path the code already takes every time
+somebody joins. Two attempts tells a network that changed under a laptop apart
+from a NAT that nothing will cross without a relay.
+
+**The console lists every listener, worst first.** This is the only way the
+failure above is ever noticed: a listener whose connection failed hears the
+music duck and then silence, which from the decks' side looks exactly like a
+room that is listening, and the person it happened to will assume you went quiet
+on purpose. Ordering is the feature — trouble at the top of a list somebody
+glances at between records — so it lives in `lib/reach.ts` where it can be
+tested away from React.
+
+**Signalling that arrives before a page can use it is held, not dropped.**
+Joining tunes in, asks `/api/rtc` how to reach another browser, and lands on the
+roster, all at once — and the decks offer the moment they see the last of those.
+Nothing orders them, so an offer can arrive while the ICE servers are still in
+flight. Returning early there looks safe and is not: the decks offer when the
+roster *changes*, so there is no second chance, and that listener would duck for
+every mic break for the rest of the evening and hear none of them.
+
+**The voice exists only while the station is on air**, at both ends. What ends
+with a session ends completely, and a voice from a broadcast that finished would
+be the one thing left talking. The sound check still works off air — setting a
+level between broadcasts is ordinary — but the peer connections go.
+
+**A console reconnecting does not interrupt a voice.** If only the console's
+socket drops, listeners keep their ids, the roster does not change, and the
+existing connections are left alone — which is right, because WebRTC is
+independent of the signalling channel once established. Only a listener whose
+own socket dropped gets a new id, and that arrives as a new roster entry the
+existing diff already offers to.
+
+**Losing the console's socket shortens the mic's lease rather than ending it.**
+The obvious thing is to shut the mic when the decks disconnect, and it is wrong:
+renewals ride HTTP, which survives a socket blip the websocket does not, so
+that would un-duck the room mid-sentence over a wobble nothing else noticed. The
+lease is cut to six seconds instead — longer than the three between renewals, so
+a console that is only reconnecting keeps its mic, and one whose tab was closed
+lapses in about the time it takes to notice.
+
+#### The sound check
+
+The console has a microphone, and it goes nowhere. It feeds a level meter and,
+optionally, your own headphones; no listener hears any of it. That sounds like
+an odd thing to build, and it is the most useful thing to build next: "the
+browser will not give me the microphone" and "the connection will not
+establish" are separate problems, and this is the one that can be answered on
+one machine, before any of the peer-connection work exists to be blamed.
+
+It is off until asked for. A console that took the microphone on open would put
+the browser's recording light on for the whole evening, including the parts
+spent queueing records.
+
+Three controls, and each is doing more than it looks like:
+
+- **Input.** `enumerateDevices` filtered to `audioinput`. Device labels are
+  empty until permission has been granted at least once, so the list is
+  "Microphone 1, Microphone 2" on first open and real names afterwards; it is
+  rebuilt when the stream opens, and again on `devicechange`, because a USB
+  interface being plugged in mid-set is ordinary.
+- **"I'm on speakers"** is an echo-cancellation switch wearing plain English.
+  Cancellation is tuned for speech — it gates, it ducks, and it treats anything
+  sustained and musical as the echo it is removing — so on headphones it comes
+  **off** and the voice is noticeably better. On speakers it goes back on and
+  does real work, because a console reached from `#on-air` is still playing the
+  station (`joined` survives the trip), which makes an open mic there a genuine
+  feedback path.
+- **"Hear myself"** is *refused* on speakers rather than warned about. A monitor
+  feeding the speaker its own microphone is listening to is a loop with nothing
+  between its ends, and the failure is instant and in everybody's ears.
+
+The meter is fast up and slow down, like any meter worth looking at: speech is
+mostly gaps, and one that tracked the signal honestly in both directions would
+flicker several times a word. It is scaled in dBFS over a 60 dB window rather
+than linearly, so a healthy speaking level sits in the middle of the bar
+instead of in the last few pixels, and the clip lamp is read off raw samples
+rather than the average, because clipping is a peak event an RMS never shows.
+
+Nothing in that loop touches React. The bar's `transform` is written straight to
+the node from the animation frame; a level in state would be a re-render of the
+whole console sixty times a second, with the queue, the library and the room all
+on the same page.
+
 ### Muting a nickname
 
 | | |
@@ -1627,8 +1842,10 @@ npm run qa:wishes      # one listener asks, the room hears nothing, the admin ma
 npm run qa:skips       # three listeners vote, the room agrees, the next track starts fresh
 npm run qa:history     # tracks appear in Earlier as they change, and survive a reload
 npm run qa:admin       # sign in, upload, queue, reorder, drive the decks
+npm run qa:mic         # two listeners duck together, and a third arrives mid-break
+npm run qa:soundcheck  # opens a real microphone on the console and watches the meter
 
-npm run qa:all         # all eleven, restarting the station between each
+npm run qa:all         # all thirteen, restarting the station between each
 ```
 
 Prefer `qa:all` for a full pass. Run back-to-back by hand they interfere with

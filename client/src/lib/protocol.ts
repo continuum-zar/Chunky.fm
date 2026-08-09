@@ -13,6 +13,36 @@ export interface Track {
   uploadedAt: number
 }
 
+/**
+ * Who this socket is. The first frame of all, and the only one about this
+ * browser rather than about the station.
+ *
+ * The id is the same one the roster carries. Nothing needed it until a voice
+ * had to be addressed: the decks offer to a listener by id and so must know
+ * which id *not* to offer to — whoever runs the station is usually tuned in as
+ * well — and a listener answers whoever offered, which means reading an id off
+ * a frame and knowing it is not their own.
+ */
+export interface YouMessage {
+  type: 'you'
+  id: number
+}
+
+/**
+ * One end of a WebRTC negotiation, relayed by the station.
+ *
+ * The station carries these without reading them, the same way it carries no
+ * audio: `payload` is an offer, an answer or an ICE candidate. What it does
+ * decide is who may send one to whom — the decks may reach any listener, a
+ * listener may reach only the decks — and `from` is stamped by the server, so a
+ * frame cannot claim to be from somebody it is not.
+ */
+export interface SignalMessage {
+  type: 'signal'
+  from: number
+  payload: unknown
+}
+
 export interface StateMessage {
   type: 'state'
   track: Track | null
@@ -49,6 +79,33 @@ export interface AirMessage {
 
 /** The same pair as it comes back from `/api/session`, without the frame. */
 export type AirSnapshot = Omit<AirMessage, 'type'>
+
+/**
+ * Whether somebody is talking over the music, and how far it drops while they
+ * are. Sent on connect — before `state`, so a listener arriving mid-break comes
+ * in already ducked — and again on every change.
+ *
+ * This is the whole of the talkover on the wire, and it carries no audio. The
+ * station does not mix: what it broadcasts is the fact and the depth, and every
+ * browser turns down the copy of the track it is already playing. So the duck
+ * works whether or not anything else does, and lands everywhere at the same
+ * instant, on the clock the room already shares.
+ */
+export interface MicMessage {
+  type: 'mic'
+  live: boolean
+  /**
+   * Linear gain the music sits at while the mic is hot. Carried whether or not
+   * the mic is open, so a page always knows how far to duck before it is asked
+   * to, and the console's slider has something to show before the first break.
+   */
+  duckTo: number
+  /** Server epoch ms at which the mic opened; null while it is shut. */
+  since: number | null
+}
+
+/** The same three as they come back from `/api/mic`, without the frame. */
+export type MicSnapshot = Omit<MicMessage, 'type'>
 
 /** A track waiting its turn. The id is the entry's, not the track's. */
 export interface QueueEntry {
@@ -180,6 +237,8 @@ export type SocketErrorCode =
   | 'slow_down'
   | 'off_air'
   | 'muted'
+  | 'not_the_decks'
+  | 'no_such_peer'
 
 /**
  * Which frame a refusal is about, when it is about one.
@@ -189,7 +248,7 @@ export type SocketErrorCode =
  * for pace also puts "not sent" under the chat, telling someone a message they
  * never sent went nowhere.
  */
-export type SocketErrorAbout = 'join' | 'say' | 'wish'
+export type SocketErrorAbout = 'join' | 'say' | 'wish' | 'signal'
 
 export interface ErrorMessage {
   type: 'error'
@@ -244,9 +303,12 @@ export interface ScheduleMessage {
 }
 
 export type ServerMessage =
+  | YouMessage
+  | SignalMessage
   | StateMessage
   | AirMessage
   | ScheduleMessage
+  | MicMessage
   | QueueMessage
   | PresenceMessage
   | ChatMessagesMessage
@@ -281,11 +343,22 @@ export interface WishMessage {
   text: string
 }
 
+/**
+ * "Pass this to that socket." The only frame the station carries rather than
+ * acts on: it has no opinion about SDP, only about who may address whom.
+ */
+export interface SignalClientMessage {
+  type: 'signal'
+  to: number
+  payload: unknown
+}
+
 export type ClientMessage =
   | PingMessage
   | JoinMessage
   | SayMessage
   | WishMessage
+  | SignalClientMessage
 
 export const audioUrl = (track: Track) => `/api/audio/${track.filename}`
 export const artworkUrl = (track: Track) =>

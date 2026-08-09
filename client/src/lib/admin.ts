@@ -1,5 +1,6 @@
 import type {
   AirSnapshot,
+  MicSnapshot,
   PlaybackSnapshot,
   QueueEntry,
   ScheduledSession,
@@ -17,6 +18,31 @@ export const ADMIN_HASH = '#admin'
  * station would refuse it rather than sending a request that comes back 400.
  */
 export const MAX_PADDING = 9_999
+
+/**
+ * The quietest the music may be ducked to. Mirrors `MIN_DUCK` in
+ * `server/src/mic.ts`; keep the two in step. Held here so the fader stops where
+ * the station would refuse it rather than sending a request that comes back 400.
+ */
+export const MIN_DUCK = 0.05
+
+/**
+ * How often an open mic is renewed, against the station's ten-second lease.
+ *
+ * Comfortably inside it: two renewals can be lost to a bad connection and the
+ * mic still does not cut out mid-sentence, which is the only failure this pace
+ * is trying to buy off.
+ */
+export const MIC_RENEW_MS = 3_000
+
+/**
+ * How long the mic stays open after the talk key comes up.
+ *
+ * Without it the music swells back between words, which sounds like the station
+ * fighting you. Long enough to bridge a breath, short enough that the bed is
+ * back before the next line of the song matters.
+ */
+export const MIC_HANGOVER_MS = 400
 
 export function isAdminRoute(location: { pathname: string; hash: string }): boolean {
   return location.hash === ADMIN_HASH || location.pathname === '/admin'
@@ -278,6 +304,42 @@ export class AdminApi {
    */
   session(action: 'start' | 'end'): Promise<AirSnapshot> {
     return this.#json<AirSnapshot>('POST', '/api/session', { action })
+  }
+
+  /**
+   * Whether somebody is talking over the music. Open, like `/api/session`, and
+   * for the same reason: it is not a secret, and the socket volunteers it a
+   * moment later anyway. Changing it is what needs the password.
+   */
+  micState(): Promise<MicSnapshot> {
+    return this.#json<MicSnapshot>('GET', '/api/mic')
+  }
+
+  /**
+   * Open the mic, keep it open, or shut it.
+   *
+   * `renew` is deliberately its own verb rather than a repeated `open`: the
+   * console beats on a timer while the key is held, and a keep-alive still in
+   * flight when it was released would otherwise put the station back on mic
+   * behind whoever just stopped talking.
+   *
+   * Every one of them answers with the snapshot it produced, which is what the
+   * card folds straight in: a talk button that waited for the broadcast would
+   * duck the music after you had already started.
+   */
+  mic(action: 'open' | 'renew' | 'close'): Promise<MicSnapshot> {
+    return this.#json<MicSnapshot>('POST', '/api/mic', { action })
+  }
+
+  /**
+   * How far the music drops while the mic is open, as a linear gain.
+   *
+   * Where the fader now stands rather than a step, like the padding and a mute,
+   * so a drag that lost its answer cannot walk the music down on retry. Clamped
+   * at the station, which is why the answer is worth reading back.
+   */
+  duck(duckTo: number): Promise<MicSnapshot> {
+    return this.#json<MicSnapshot>('POST', '/api/mic', { action: 'duck', duckTo })
   }
 
   async queue(): Promise<QueueEntry[]> {

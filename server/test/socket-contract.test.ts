@@ -35,6 +35,7 @@ async function connect(): Promise<TestClient> {
 
 /** Everything the connect burst sends, consumed so later waits see new frames. */
 async function settle(client: TestClient): Promise<void> {
+  await client.nextMic()
   await client.nextState()
   await client.nextQueue()
   await client.nextPresence()
@@ -60,6 +61,9 @@ describe('every socket refusal is machine-readable', () => {
       ['unrecognised_message', () => client.send('{ not json')],
       ['unrecognised_message', () => client.send({ type: 'nonsense' } as never)],
       ['command_over_http', () => client.send({ type: 'skip' } as never)],
+      // Going on mic is a command too, however live it feels. The `mic` frame
+      // travels the other way and there is nothing to send back up.
+      ['command_over_http', () => client.send({ type: 'mic' } as never)],
       ['nickname_required', () => client.send({ type: 'join', nickname: '   ' })],
       ['empty_message', () => client.send({ type: 'say', text: '  \t ' })],
       ['message_too_long', () => client.send({ type: 'say', text: 'x'.repeat(501) })],

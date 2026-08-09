@@ -5,6 +5,7 @@ import type {
   ChatMessagesMessage,
   ClientMessage,
   HistoryMessage,
+  MicMessage,
   PresenceMessage,
   QueueMessage,
   ServerMessage,
@@ -88,6 +89,10 @@ export class TestClient {
 
   async nextSchedule(timeoutMs?: number): Promise<ScheduleMessage> {
     return (await this.waitFor((m) => m.type === 'schedule', timeoutMs)) as ScheduleMessage
+  }
+
+  async nextMic(timeoutMs?: number): Promise<MicMessage> {
+    return (await this.waitFor((m) => m.type === 'mic', timeoutMs)) as MicMessage
   }
 
   async nextState(timeoutMs?: number): Promise<StateMessage> {

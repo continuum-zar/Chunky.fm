@@ -23,7 +23,9 @@ import { useServerClock } from './hooks/useServerClock.js'
 import { type SyncTrails, useSyncTrails } from './hooks/useSyncTrails.js'
 import { useStation } from './hooks/useStation.js'
 import { useSyncedAudio } from './hooks/useSyncedAudio.js'
+import { useIceServers, useVoiceReceiver } from './hooks/useVoice.js'
 import { seekTo } from './lib/audio-element.js'
+import { type StationAudio, stationAudio } from './lib/audio-graph.js'
 import {
   type Availability,
   type Standing,
@@ -224,8 +226,26 @@ function Station({ route: requested, session }: { route: Route; session: AdminSe
   const [nickname, setNickname] = useState(() => loadNickname() ?? '')
 
   // The clock needs to see pongs but the station owns the socket, so the
-  // handler goes through a ref to break what would otherwise be a cycle.
+  // handler goes through a ref to break what would otherwise be a cycle. The
+  // voice reads the same socket for the same reason: a signalling frame is
+  // just another thing arriving on it.
   const routeToClock = useRef<(message: ServerMessage) => void>(() => undefined)
+  /**
+   * Everything else that wants to read the socket.
+   *
+   * A set rather than a second ref, because there are now two ends of the voice
+   * and this page can be both of them at once: the console is usually tuned in
+   * as well, so a signalling frame may be for the microphone it is sending or
+   * for the voice it is hearing. The socket has one handler, so the fan-out has
+   * to happen somewhere, and here is the only place that can see both.
+   */
+  const readers = useRef(new Set<(message: ServerMessage) => void>())
+  const subscribe = useCallback((reader: (message: ServerMessage) => void) => {
+    readers.current.add(reader)
+    return () => {
+      readers.current.delete(reader)
+    }
+  }, [])
   const {
     status,
     reach,
@@ -246,7 +266,13 @@ function Station({ route: requested, session }: { route: Route; session: AdminSe
     applyAir,
     schedule,
     applySchedule,
-  } = useStation(undefined, (message) => routeToClock.current(message))
+    mic,
+    applyMic,
+    me,
+  } = useStation(undefined, (message) => {
+    routeToClock.current(message)
+    for (const reader of readers.current) reader(message)
+  })
   const admin = isConsole(requested)
   const clock = useServerClock(connection, { connected: status === 'connected' })
   // Only once tuned in: a socket is open from the moment the page loads, and a
@@ -284,6 +310,51 @@ function Station({ route: requested, session }: { route: Route; session: AdminSe
     onCorrection,
   })
 
+  /**
+   * The gain stage the music sits in, so the decks can talk over it.
+   *
+   * Built at join and not before. Routing an element through Web Audio is
+   * permanent and total, and a context that has never been resumed is silence
+   * rather than quiet music, so the graph is made in the one place there is a
+   * gesture to spend on waking it. See `lib/audio-graph.ts`.
+   */
+  const stage = useRef<StationAudio | null>(null)
+  useEffect(() => () => stage.current?.close(), [])
+
+  /**
+   * The voice, when there is one.
+   *
+   * Only once tuned in, for the reason nothing else makes a sound before then:
+   * the gain stage does not exist until the join click, so there is nowhere to
+   * play a voice and no woken context to play it through.
+   */
+  // Asked for by whichever end of a voice this page is, and it can be both.
+  const iceServers = useIceServers(joined || admin)
+  const voice = useVoiceReceiver({
+    connection,
+    me,
+    // Tuned in *and* there being a broadcast. What ends with a session ends
+    // completely — the chat, the wishes, the history all go — and a voice from
+    // an evening that finished would be the one thing left talking.
+    active: joined && (air?.live ?? false),
+    iceServers,
+    onStream: useCallback((stream: MediaStream | null) => stage.current?.play(stream), []),
+  })
+  useEffect(() => subscribe(voice.handleMessage), [subscribe, voice.handleMessage])
+
+
+  /**
+   * Follow the station down and back up.
+   *
+   * The whole of the ducking on this side: the server broadcasts how far the
+   * music should sit and every listener applies it to their own copy, so a
+   * break lands everywhere at the same instant without a byte of audio passing
+   * through the station. `duck` ramps; nothing here has to.
+   */
+  useEffect(() => {
+    stage.current?.duck(mic?.live ? mic.duckTo : 1)
+  }, [mic?.live, mic?.duckTo])
+
   // Only this listener's own ears. Muting is not leaving, so the socket, the
   // roster and the clock all carry on exactly as they were.
   const [muted, setMuted] = useState(false)
@@ -304,6 +375,11 @@ function Station({ route: requested, session }: { route: Route; session: AdminSe
     if (!audio) return
     audio.muted = false
     setMuted(false)
+    // A gesture, and the one place a listener reliably makes another one after
+    // joining. The OS suspends audio contexts for a call or a lock screen, and
+    // a suspended context is not quiet music, it is none: unmuting an element
+    // whose graph is asleep would look like the button not working.
+    stage.current?.resume()
     if (audio.paused && state?.track && state.pausedAt === null) {
       seekTo(audio, expectedPositionSeconds(state, clock.serverNow()))
       void audio.play().catch(() => undefined)
@@ -341,6 +417,19 @@ function Station({ route: requested, session }: { route: Route; session: AdminSe
     // before it: naming yourself and tuning in are one gesture, and splitting
     // them would leave the audio starting outside any gesture at all.
     const audio = audioRef.current
+    if (audio) {
+      // Inside the gesture, and before play(), because this is the moment the
+      // browser will let a context be resumed. It is also the last moment it is
+      // safe to route the element at all: after this the music only reaches the
+      // speakers through the graph.
+      stage.current = stationAudio(audio)
+      // Applied here rather than left to the effect, so somebody arriving in
+      // the middle of a mic break comes in already ducked. The effect runs
+      // after the commit, which is a few milliseconds of a song at full volume
+      // under somebody's voice — the exact arrival the server sends the `mic`
+      // frame before `state` to avoid.
+      stage.current.duck(mic?.live ? mic.duckTo : 1)
+    }
     if (audio && state?.track && state.pausedAt === null) {
       // Through seekTo, not currentTime: the click can land before the element
       // has metadata, and a bare assignment is silently dropped there, which
@@ -457,7 +546,9 @@ function Station({ route: requested, session }: { route: Route; session: AdminSe
             state={state}
             air={air}
             queue={queue}
-            roster={listeners?.length ?? null}
+            // The roster itself, not a count: the console needs the names to
+            // say who is hearing a mic break and who is not.
+            listeners={listeners}
             padding={padding}
             messages={messages}
             serverNow={clock.serverNow}
@@ -469,6 +560,12 @@ function Station({ route: requested, session }: { route: Route; session: AdminSe
             applyAir={applyAir}
             schedule={schedule}
             applySchedule={applySchedule}
+            mic={mic}
+            applyMic={applyMic}
+            connection={connection}
+            me={me}
+            iceServers={iceServers}
+            subscribe={subscribe}
           />
         ) : !joined ? (
           canTuneIn(here) ? (
@@ -541,7 +638,13 @@ function Station({ route: requested, session }: { route: Route; session: AdminSe
                 </div>
               ) : track ? (
                 <div className="stage">
-                  <OnAir live={onAir} idleLabel={paused ? 'PAUSED' : 'OFF AIR'} />
+                  <OnAir
+                    live={onAir}
+                    idleLabel={paused ? 'PAUSED' : 'OFF AIR'}
+                    // Only while there is sound to talk over. A break announced
+                    // under a paused deck would be a badge about nothing.
+                    talking={Boolean(onAir && mic?.live)}
+                  />
 
                   {/* No clock under the title. A listener is not seeking and
                       cannot, so "1:46 / 4:00" was answering a question nobody

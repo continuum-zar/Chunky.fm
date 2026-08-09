@@ -10,6 +10,7 @@ import type { ChatLog } from '../src/chat.js'
 import type { Config } from '../src/config.js'
 import type { OnAir } from '../src/air.js'
 import type { Schedule } from '../src/schedule.js'
+import type { Mic } from '../src/mic.js'
 import type { Mutes } from '../src/mutes.js'
 import type { Padding } from '../src/padding.js'
 import { type Db, openDb } from '../src/db.js'
@@ -35,6 +36,7 @@ export interface Harness {
   air: OnAir
   schedule: Schedule
   mutes: Mutes
+  mic: Mic
   padding: Padding
   lyrics: LyricsService
   /** Only set when the harness was started with `listen: true`. */
@@ -62,8 +64,19 @@ export interface HarnessOptions {
   joinRefillMs?: number
   wishBurst?: number
   wishRefillMs?: number
+  /** Signalling frames a listener may send back to back. The decks are exempt. */
+  signalBurst?: number
+  signalRefillMs?: number
   signInBurst?: number
   signInRefillMs?: number
+  /** How long an open mic lasts without a renew. See `Mic`. */
+  micLeaseMs?: number
+  /**
+   * How often a lapsed mic is swept up. The tests that are about expiry call
+   * `mic.sweep()` by hand against a clock they drive, so this is only here for
+   * anything that wants the real interval out of the way.
+   */
+  micSweepIntervalMs?: number
   /**
    * Stands in for LRCLIB. Defaults to an archive that knows nothing, so no
    * test reaches the real internet by accident; the lyrics tests hand in one
@@ -89,8 +102,12 @@ export async function startHarness(
     joinRefillMs,
     wishBurst,
     wishRefillMs,
+    signalBurst,
+    signalRefillMs,
     signInBurst,
     signInRefillMs,
+    micLeaseMs,
+    micSweepIntervalMs,
     lyricsFetch = async () => new Response(null, { status: 404 }),
     listen = false,
   }: HarnessOptions = {},
@@ -112,6 +129,11 @@ export async function startHarness(
     maxUploadBytes: 10 * 1024 * 1024,
     // Never resolved: the harness stubs the fetch itself. See `lyricsFetch`.
     lrclibBaseUrl: 'http://lrclib.invalid',
+    // No STUN and no relay, so nothing here reaches the internet to find out
+    // how two browsers would meet. The tests that are about `/api/rtc` pass
+    // their own through `overrides`.
+    stunUrls: [],
+    turn: null,
     // No client bundle: these tests are about the API. The doorway tests build
     // a bundle in a temp dir and pass it through `overrides`.
     clientDir: null,
@@ -138,8 +160,12 @@ export async function startHarness(
     joinRefillMs,
     wishBurst,
     wishRefillMs,
+    signalBurst,
+    signalRefillMs,
     signInBurst,
     signInRefillMs,
+    micLeaseMs,
+    micSweepIntervalMs,
     lyricsFetch,
   })
 
@@ -162,6 +188,7 @@ export async function startHarness(
     air: app.air,
     schedule: app.schedule,
     mutes: app.mutes,
+    mic: app.mic,
     padding: app.padding,
     lyrics: app.lyrics,
     wsUrl,

@@ -51,6 +51,27 @@ export interface Config {
    * 404 instead of leaving `/` alone, and the compose stack would break in a
    * way that only shows up in a browser.
    */
+  /**
+   * Where a browser goes to find out how to reach another browser.
+   *
+   * The voice is peer-to-peer: it never touches this server, which is the whole
+   * reason a mic costs nothing to run. What two browsers behind two routers do
+   * need is help discovering each other, and that is all these are.
+   *
+   * **STUN** is a question — "what does my address look like from outside?" —
+   * and the answer is a few hundred bytes, once, per connection. **TURN** is a
+   * relay, for the minority (roughly one listener in six) behind a NAT strict
+   * enough that no direct path exists. Mono voice is about 32 kbps, so a
+   * relayed listener costs around 14 MB an hour, which is inside every free
+   * tier on the market and inside a very small VPS if you would rather own it.
+   *
+   * Empty lists are a station that only works where every listener can be
+   * reached directly, which in practice means a LAN. That is a real way to run
+   * this and it is not the default.
+   */
+  stunUrls: string[]
+  /** Null unless a relay is configured; see `stunUrls`. */
+  turn: { url: string; username: string; credential: string } | null
   clientDir: string | null
   /**
    * Who is allowed to tell the station where a request really came from.
@@ -150,6 +171,52 @@ function stationKeyFromEnv(env: NodeJS.ProcessEnv): string | null {
 
 const DEFAULT_MAX_UPLOAD_BYTES = 150 * 1024 * 1024
 
+/**
+ * Google's public STUN, as the out-of-the-box answer.
+ *
+ * This is the one place the station reaches somewhere it was not configured to,
+ * and it is worth saying why rather than leaving it to be discovered. Nothing
+ * else here does: the audio is self-hosted, the artwork is self-hosted, even
+ * the gramophone's decoder is bundled rather than fetched, and the one existing
+ * outbound call (LRCLIB) is for a thing the station cannot know on its own.
+ * This is the same kind of thing — two browsers genuinely cannot work out how
+ * to reach each other without asking something outside both of them.
+ *
+ * What crosses it is a browser's own address and nothing else: no audio, no
+ * identity, nothing about the station or what is playing on it. Set
+ * `STUN_URLS` to point somewhere else, or to an empty string to ask nobody,
+ * which is a station that works on a LAN and not beyond one.
+ */
+const DEFAULT_STUN_URLS = ['stun:stun.l.google.com:19302']
+
+/** Comma-separated, trimmed, and an explicit empty string means none at all. */
+function listFromEnv(value: string | undefined, fallback: string[]): string[] {
+  if (value === undefined) return fallback
+  return value
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean)
+}
+
+/**
+ * The relay, or nothing.
+ *
+ * All three parts or none: a URL with no credentials is a relay that will
+ * refuse every listener it is handed to, and finding that out means watching
+ * one person in six silently fail to hear a voice. Better to refuse at boot,
+ * where somebody is looking.
+ */
+function turnFromEnv(env: NodeJS.ProcessEnv): Config['turn'] {
+  const url = env.TURN_URL?.trim()
+  const username = env.TURN_USERNAME?.trim()
+  const credential = env.TURN_CREDENTIAL?.trim()
+  if (!url && !username && !credential) return null
+  if (!url || !username || !credential) {
+    throw new Error('TURN_URL, TURN_USERNAME and TURN_CREDENTIAL must be set together, or not at all')
+  }
+  return { url, username, credential }
+}
+
 function intFromEnv(value: string | undefined, fallback: number, name: string): number {
   if (value === undefined || value === '') return fallback
   const parsed = Number(value)
@@ -183,6 +250,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     stationKey: stationKeyFromEnv(env),
     maxUploadBytes: intFromEnv(env.MAX_UPLOAD_BYTES, DEFAULT_MAX_UPLOAD_BYTES, 'MAX_UPLOAD_BYTES'),
     lrclibBaseUrl: env.LRCLIB_BASE_URL?.trim() || 'https://lrclib.net',
+    stunUrls: listFromEnv(env.STUN_URLS, DEFAULT_STUN_URLS),
+    turn: turnFromEnv(env),
     // Unset means "something else is serving the client", which is true of both
     // the compose stack and `npm run dev`. Only the single-image deployment
     // sets it. See the root Dockerfile.

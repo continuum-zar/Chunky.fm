@@ -1,10 +1,53 @@
 import type { AirSnapshot } from './air.js'
 import { type ChatMessage, MESSAGE_MAX_LENGTH, normalizeMessageText } from './chat.js'
 import type { Play } from './history.js'
+import type { MicSnapshot } from './mic.js'
 import type { PlaybackSnapshot } from './playback.js'
 import { type Listener, normalizeNickname } from './presence.js'
 import type { QueueEntry } from './queue.js'
 import { type Wish, WISH_MAX_LENGTH, normalizeWishText } from './wishes.js'
+
+/**
+ * Who this socket is, as far as the station is concerned. The first frame of
+ * all, and the only one addressed to one socket about itself.
+ *
+ * The id is the same one the roster carries, and it exists on every socket
+ * whether or not anybody has named themselves. Until the mic learned to send a
+ * voice, nothing needed it: a listener is told who *else* is here and never has
+ * to place itself among them. Signalling does, twice over. The decks address an
+ * offer to a listener by id, so they need to know which id not to offer to —
+ * whoever runs the station is usually tuned in as well, and a console that
+ * called itself would spend the evening negotiating with its own microphone.
+ * And a listener answers whoever offered, which means reading an id off a frame
+ * and trusting it is not its own.
+ */
+export interface YouMessage {
+  type: 'you'
+  id: number
+}
+
+/**
+ * One end of a WebRTC negotiation talking to the other, relayed.
+ *
+ * The station does not read these. `payload` is an offer, an answer or an ICE
+ * candidate, and it is carried from one socket to another without being
+ * understood — the same way the station carries no audio. What the server does
+ * own is *who may say what to whom*, which is the whole of the gate:
+ *
+ * - The decks may address any socket. That is what fanning a voice out is.
+ * - A listener may address the decks and nobody else. Two listeners have no
+ *   business negotiating with each other, and a socket that could reach any
+ *   other by id would be a way to make the station introduce strangers.
+ *
+ * `from` on the way out is stamped by the server, never carried by the sender,
+ * for the reason a chat message's author is: a frame that named its own origin
+ * would let a listener pose as the decks and offer somebody a microphone.
+ */
+export interface SignalMessage {
+  type: 'signal'
+  from: number
+  payload: unknown
+}
 
 /** Full playback state. Sent on connect and on every change. */
 export type StateMessage = PlaybackSnapshot & { type: 'state' }
@@ -42,6 +85,25 @@ export interface ScheduleMessage {
   type: 'schedule'
   schedule: { startsAt: number; poster: string | null } | null
 }
+
+/**
+ * Whether somebody is talking over the music, and how far it drops while they
+ * are. Sent on connect and on every change.
+ *
+ * Kept out of `state` for the reason the queue is, and then some: playback
+ * changes several times a track, and a mic break changes twice a sentence, so
+ * folding them together would ship a playback snapshot every time whoever runs
+ * the decks drew breath.
+ *
+ * It is on the wire at all because the ducking is not a mix. Nothing about the
+ * music passes through this server, so there is no fader here to move; what
+ * there is instead is this frame, and thirty browsers turning down the copy
+ * they are each already playing at the same instant. A listener who arrives
+ * mid-break is handed it in the connect burst, before `state`, so they come in
+ * already ducked rather than putting half a second of full-volume music under
+ * somebody's voice.
+ */
+export type MicMessage = MicSnapshot & { type: 'mic' }
 
 /**
  * What's coming up. Kept out of `state` on purpose: playback changes several
@@ -177,6 +239,19 @@ export type SocketErrorCode =
    * them without ever finding out.
    */
   | 'muted'
+  /**
+   * A listener tried to signal something that is not the decks.
+   *
+   * The one rule the relay enforces on content, and the reason it is a refusal
+   * rather than a silent drop: a client that has this wrong is negotiating with
+   * a peer that will never answer, and would sit waiting on it forever.
+   */
+  | 'not_the_decks'
+  /**
+   * Signalling addressed to a socket that is not there: a listener who left
+   * between the roster and the offer, which is ordinary rather than an error.
+   */
+  | 'no_such_peer'
 
 /**
  * Which frame a refusal is about, when it is about one.
@@ -187,7 +262,7 @@ export type SocketErrorCode =
  * to know which composer. Without it, a wish refused for pace also lights up the
  * chat, telling someone a message they never sent was not sent.
  */
-export type SocketErrorAbout = 'join' | 'say' | 'wish'
+export type SocketErrorAbout = 'join' | 'say' | 'wish' | 'signal'
 
 export interface ErrorMessage {
   type: 'error'
@@ -208,9 +283,12 @@ export function errorMessage(
 }
 
 export type ServerMessage =
+  | YouMessage
+  | SignalMessage
   | StateMessage
   | AirMessage
   | ScheduleMessage
+  | MicMessage
   | QueueMessage
   | PresenceMessage
   | ChatMessagesMessage
@@ -263,7 +341,27 @@ export interface WishMessage {
   text: string
 }
 
-export type ClientMessage = PingMessage | JoinMessage | SayMessage | WishMessage
+/**
+ * "Pass this to that socket."
+ *
+ * The one frame a client sends that the station does not act on at all. It is
+ * carried, not read: `payload` is somebody's SDP or an ICE candidate, and the
+ * station has no opinion about any of it. What it does have an opinion about is
+ * `to`, which is the whole gate. See `SignalMessage`.
+ *
+ * This is also the one place the socket's read-only rule bends, and it bends
+ * narrowly on purpose: signalling mutates nothing and drives nothing, so it is
+ * not a command, and commands still go over HTTP where the admin gate is. What
+ * it *is* is privileged — only the decks may address a listener — which is why
+ * the socket now has to know which of its connections is the admin.
+ */
+export interface SignalClientMessage {
+  type: 'signal'
+  to: number
+  payload: unknown
+}
+
+export type ClientMessage = PingMessage | JoinMessage | SayMessage | WishMessage | SignalClientMessage
 
 /**
  * Frames that read as an attempt to drive the station.
@@ -294,6 +392,10 @@ const COMMAND_TYPES = new Set([
   'end_session',
   'mute',
   'unmute',
+  // Opening the mic is a command too, however live it feels. The `mic` frame
+  // travels the other way, and a client that tries to send one is a client
+  // that has mistaken being told for being able to tell.
+  'mic',
 ])
 
 /** Either a message the socket will act on, or why it won't. */
@@ -311,6 +413,18 @@ export function airMessage(snapshot: AirSnapshot): AirMessage {
 
 export function scheduleMessage(next: ScheduleMessage['schedule']): ScheduleMessage {
   return { type: 'schedule', schedule: next }
+}
+
+export function micMessage(snapshot: MicSnapshot): MicMessage {
+  return { type: 'mic', ...snapshot }
+}
+
+export function youMessage(id: number): YouMessage {
+  return { type: 'you', id }
+}
+
+export function signalMessage(from: number, payload: unknown): SignalMessage {
+  return { type: 'signal', from, payload }
 }
 
 export function queueMessage(entries: QueueEntry[]): QueueMessage {
@@ -408,6 +522,30 @@ export function parseClientMessage(raw: string): ParsedClientMessage {
       return { ok: false, code: 'empty_wish', error: 'an empty wish is not a wish', about: 'wish' }
     }
     return { ok: true, message: { type: 'wish', text } }
+  }
+  if (message.type === 'signal') {
+    // `to` is checked here; *who may address it* is checked in the socket
+    // layer, which is the only place that knows which connections are the
+    // decks. The payload is not checked at all, on purpose: it is somebody
+    // else's SDP, and a station that validated it would be a station with an
+    // opinion about WebRTC versions it has no way to keep current.
+    if (typeof message.to !== 'number' || !Number.isInteger(message.to) || message.to <= 0) {
+      return {
+        ok: false,
+        code: 'unrecognised_message',
+        error: 'signalling needs a peer to address',
+        about: 'signal',
+      }
+    }
+    if (message.payload === undefined) {
+      return {
+        ok: false,
+        code: 'unrecognised_message',
+        error: 'signalling needs something to carry',
+        about: 'signal',
+      }
+    }
+    return { ok: true, message: { type: 'signal', to: message.to, payload: message.payload } }
   }
   if (typeof message.type === 'string' && COMMAND_TYPES.has(message.type)) {
     return {

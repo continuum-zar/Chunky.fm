@@ -38,12 +38,21 @@ restart_station() {
   ( cd "$SERVER_DIR" \
       && PORT=$PORT ADMIN_PASSWORD="$ADMIN_PASSWORD" AUDIO_STORAGE_DIR="${AUDIO_STORAGE_DIR:-$SERVER_DIR/audio_storage}" \
          nohup node dist/index.js >/dev/null 2>&1 & )
-  for _ in $(seq 1 20); do sleep 0.5; up && return 0; done
+  for _ in $(seq 1 20); do sleep 0.5; up || continue
+    # On air, because a station is off by default: going live the instant it
+    # was deployed would put every restart on air with an empty queue. Every
+    # script below assumes a broadcast is happening — the chat, the wish book
+    # and the mic are all refused without a session to belong to.
+    curl -s -o /dev/null -X POST -H "authorization: Bearer $ADMIN_PASSWORD" \
+      -H 'content-type: application/json' -d '{"action":"start"}' \
+      "$API_URL/api/session"
+    return 0
+  done
   return 1
 }
 
 SCRIPTS=(
-  qa:playback qa:admin qa:chat qa:chat-refusal qa:wishes
+  qa:playback qa:admin qa:mic qa:soundcheck qa:chat qa:chat-refusal qa:wishes
   qa:history qa:presence qa:reconnect qa:offline verify:sync
 )
 

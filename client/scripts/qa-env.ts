@@ -94,6 +94,58 @@ export function playbackCommand(body: unknown): Promise<unknown> {
   }).then((res) => res.json())
 }
 
+/**
+ * Opens the doors.
+ *
+ * A station comes up off air — a deploy that went live on its own would put
+ * every restart on air with an empty queue — so a script that wants listeners
+ * to hear anything has to say so first. Idempotent at the station, so calling
+ * it on an already-live one is free.
+ */
+export function goLive(): Promise<unknown> {
+  return fetch(`${API_URL}/api/session`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${ADMIN_PASSWORD}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ action: 'start' }),
+  }).then((res) => res.json())
+}
+
+/** Drives the mic the way the console does: over HTTP, behind the password. */
+export function micCommand(body: unknown): Promise<{ live: boolean; duckTo: number }> {
+  return fetch(`${API_URL}/api/mic`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${ADMIN_PASSWORD}`, 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  }).then((res) => res.json() as Promise<{ live: boolean; duckTo: number }>)
+}
+
+/**
+ * Records every gain ramp the page asks for, before any of its script runs.
+ *
+ * The duck happens inside a Web Audio graph, which is not readable from
+ * outside: there is no property on the element to poll and no attribute that
+ * changes. Patching the one method the stage uses turns it into a list, and
+ * does it without the app carrying a seam that exists only for a test.
+ *
+ * Every ramp in the station is the duck, so nothing else lands in here.
+ */
+export const INSTRUMENT_DUCKS = `(() => {
+  window.__ducks = []
+  const original = AudioParam.prototype.setTargetAtTime
+  AudioParam.prototype.setTargetAtTime = function (target, when, constant) {
+    window.__ducks.push({ target: target, at: Date.now() })
+    return original.call(this, target, when, constant)
+  }
+  return true
+})()`
+
+export const DUCKS = `window.__ducks || []`
+
+export interface Duck {
+  target: number
+  at: number
+}
+
 export const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /* --- taking the station down and putting it back up ------------------------

@@ -4,6 +4,7 @@ import {
   type FormEvent,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react'
@@ -15,6 +16,9 @@ import usersIcon from './assets/icons/users.svg'
 import {
   AdminError,
   MAX_PADDING,
+  MIC_HANGOVER_MS,
+  MIC_RENEW_MS,
+  MIN_DUCK,
   type AdminApi,
   type PlaybackCommand,
   type WishBook,
@@ -27,14 +31,20 @@ import { posterUrl } from './lib/protocol.js'
 import type {
   AirSnapshot,
   ChatMessage,
+  Listener,
+  MicSnapshot,
   PlaybackSnapshot,
+  ServerMessage,
   QueueEntry,
   ScheduledSession,
   StateMessage,
   Track,
 } from './lib/protocol.js'
 import type { AdminSession } from './hooks/useAdminSession.js'
-import type { StationStatus } from './lib/station.js'
+import { type MicInput, useMicInput } from './hooks/useMicInput.js'
+import type { StationConnection, StationStatus } from './lib/station.js'
+import { HEALTH, type PeerState, hearingCount, orderByHealth } from './lib/reach.js'
+import { useVoiceBroadcast } from './hooks/useVoice.js'
 
 export interface AdminPanelProps {
   /** The station's own broadcast; the panel never keeps its own copy. */
@@ -55,15 +65,34 @@ export interface AdminPanelProps {
   schedule: ScheduledSession | null
   queue: QueueEntry[] | null
   /**
-   * How many people are really in the room, or null before the first roster.
-   * Shown here only so the padding beside it reads as what it is: the console
-   * is the one page that sees the two halves of the headcount apart.
+   * Who is really in the room, or null before the first roster.
+   *
+   * The names rather than a count, because the console needs both halves of
+   * what a roster is for: the size of it, so the padding beside it reads as
+   * what it is, and the people in it, so a mic break can say who is hearing it.
    */
-  roster: number | null
+  listeners: Listener[] | null
   /** Heads added to that count by whoever is running the decks. */
   padding: number
   /** The room talking, read-only; the console is not in the room. */
   messages: ChatMessage[]
+  /**
+   * Whether this station is talking over its own music, and how far the music
+   * sits under it. Null until the first frame.
+   *
+   * Arrives on the socket like everything else here rather than being kept by
+   * the card, so a mic opened from a second tab moves this one too, and so the
+   * console is ducking against exactly the number every listener was sent.
+   */
+  mic: MicSnapshot | null
+  /** The socket, for signalling. Commands still go over HTTP. */
+  connection: StationConnection | null
+  /** This console's own id, so it never offers itself a microphone. */
+  me: number | null
+  /** How to reach another browser, or null until `/api/rtc` has answered. */
+  iceServers: RTCIceServer[] | null
+  /** Read the socket. This page can be both ends of a voice; see App. */
+  subscribe(reader: (message: ServerMessage) => void): () => void
   /**
    * The station's clock, for the scrub bar. The console reads a position out of
    * `startedAt`, which is a point on the *server's* clock, so subtracting this
@@ -84,6 +113,7 @@ export interface AdminPanelProps {
   applyPadding(count: number): void
   applyAir(snapshot: AirSnapshot): void
   applySchedule(next: ScheduledSession | null): void
+  applyMic(snapshot: MicSnapshot): void
 }
 
 /**
@@ -102,9 +132,14 @@ export function AdminPanel({
   air,
   schedule,
   queue,
-  roster,
+  listeners,
   padding,
   messages,
+  mic,
+  connection,
+  me,
+  iceServers,
+  subscribe,
   serverNow,
   session,
   status,
@@ -113,6 +148,7 @@ export function AdminPanel({
   applyPadding,
   applyAir,
   applySchedule,
+  applyMic,
 }: AdminPanelProps) {
   const { status: signedIn, api, error: sessionError, signIn, signOut } = session
 
@@ -135,9 +171,14 @@ export function AdminPanel({
       air={air}
       schedule={schedule}
       queue={queue}
-      roster={roster}
+      listeners={listeners}
       padding={padding}
       messages={messages}
+      mic={mic}
+      connection={connection}
+      me={me}
+      iceServers={iceServers}
+      subscribe={subscribe}
       serverNow={serverNow}
       connected={status === 'connected'}
       applyState={applyState}
@@ -145,6 +186,7 @@ export function AdminPanel({
       applyPadding={applyPadding}
       applyAir={applyAir}
       applySchedule={applySchedule}
+      applyMic={applyMic}
       onSignOut={signOut}
     />
   )
@@ -218,9 +260,14 @@ interface ControlsProps {
   air: AirSnapshot | null
   schedule: ScheduledSession | null
   queue: QueueEntry[] | null
-  roster: number | null
+  listeners: Listener[] | null
   padding: number
   messages: ChatMessage[]
+  mic: MicSnapshot | null
+  connection: StationConnection | null
+  me: number | null
+  iceServers: RTCIceServer[] | null
+  subscribe(reader: (message: ServerMessage) => void): () => void
   serverNow(): number
   connected: boolean
   applyState(snapshot: PlaybackSnapshot): void
@@ -228,6 +275,7 @@ interface ControlsProps {
   applyPadding(count: number): void
   applyAir(snapshot: AirSnapshot): void
   applySchedule(next: ScheduledSession | null): void
+  applyMic(snapshot: MicSnapshot): void
   onSignOut: () => void
 }
 
@@ -237,9 +285,14 @@ function Controls({
   air,
   schedule,
   queue,
-  roster,
+  listeners,
   padding,
   messages,
+  mic,
+  connection,
+  me,
+  iceServers,
+  subscribe,
   serverNow,
   connected,
   applyState,
@@ -247,6 +300,7 @@ function Controls({
   applyPadding,
   applyAir,
   applySchedule,
+  applyMic,
   onSignOut,
 }: ControlsProps) {
   const [tracks, setTracks] = useState<Track[]>([])
@@ -367,6 +421,35 @@ function Controls({
     [api, applyPadding, run],
   )
 
+  /**
+   * The mic, deliberately not through `run`.
+   *
+   * Everything else on this panel is a click that can afford to grey the
+   * console for a round trip. The mic is held down, renewed every few seconds
+   * while it is, and released again: a talk button that set `busy` would
+   * flicker every other control three times a sentence. The 401 still has to be
+   * caught, because a lapsed session must end the same way everywhere.
+   */
+  const micAction = useCallback(
+    async (act: () => Promise<MicSnapshot>) => {
+      try {
+        applyMic(await act())
+      } catch (err) {
+        if (err instanceof AdminError && err.unauthorized) return onSignOut()
+        setError(err instanceof Error ? err.message : 'the mic did not answer')
+      }
+    },
+    [applyMic, onSignOut],
+  )
+
+  const openMic = useCallback(() => void micAction(() => api.mic('open')), [api, micAction])
+  const closeMic = useCallback(() => void micAction(() => api.mic('close')), [api, micAction])
+  const renewMic = useCallback(() => void micAction(() => api.mic('renew')), [api, micAction])
+  const setDuck = useCallback(
+    (to: number) => void micAction(() => api.duck(to)),
+    [api, micAction],
+  )
+
   const report = (line: string) => setUploads((seen) => [...seen, { id: seen.length, line }])
 
   const upload = useCallback(
@@ -402,7 +485,7 @@ function Controls({
           </p>
         </div>
         <div className="console__actions">
-          <Headcount roster={roster} padding={padding} busy={busy} onSet={setPadding} />
+          <Headcount roster={listeners?.length ?? null} padding={padding} busy={busy} onSet={setPadding} />
           <OnAirSwitch air={air} busy={busy} onSet={setAir} />
           <ShareInvite api={api} />
           <button type="button" className="button button--quiet" onClick={onSignOut}>
@@ -438,6 +521,21 @@ function Controls({
 
       <div className="console__columns">
         <div className="console__stack">
+          {/* First, because it is the one control here that is held rather than
+              clicked, and the one that is reached for without looking. */}
+          <MicCard
+            mic={mic}
+            air={air}
+            connection={connection}
+            me={me}
+            listeners={listeners}
+            iceServers={iceServers}
+            subscribe={subscribe}
+            onOpen={openMic}
+            onClose={closeMic}
+            onRenew={renewMic}
+            onDuck={setDuck}
+          />
           <QueueCard
             entries={entries}
             state={state}
@@ -478,6 +576,460 @@ function Controls({
   )
 }
 
+
+/** The talk key. A letter, and not the spacebar; see the note in `MicCard`. */
+const TALK_KEY = 'm'
+
+/** How far the music drops, in dB, for a slider that speaks a radio language. */
+const decibels = (gain: number) => Math.round(20 * Math.log10(gain))
+
+/**
+ * The mic.
+ *
+ * What this card does *not* do is carry any sound: the station holds no mixer
+ * and this sends no audio. Pressing talk tells the station the mic is open, and
+ * every listener's browser turns down the copy of the track it is already
+ * playing. The duck lands everywhere at once, on the clock the room already
+ * shares, and it costs the station nothing — which is why it works before there
+ * is any voice to put over it, and would keep working for a listener whose
+ * voice connection had failed.
+ *
+ * Two ways to hold it, because they are for different things. Push-to-talk is
+ * what anyone actually reaches for: hold the button, or hold the key, and let
+ * go. Latch is for a long segment where holding something down would be absurd.
+ *
+ * Held, not toggled, is the safer default in the way that matters: the failure
+ * mode of a toggle is a mic left open over a record while you talk to someone
+ * in the room.
+ */
+function MicCard({
+  mic,
+  air,
+  connection,
+  me,
+  listeners,
+  iceServers,
+  subscribe,
+  onOpen,
+  onClose,
+  onRenew,
+  onDuck,
+}: {
+  mic: MicSnapshot | null
+  air: AirSnapshot | null
+  connection: StationConnection | null
+  me: number | null
+  listeners: Listener[] | null
+  iceServers: RTCIceServer[] | null
+  subscribe(reader: (message: ServerMessage) => void): () => void
+  onOpen(): void
+  onClose(): void
+  onRenew(): void
+  onDuck(to: number): void
+}) {
+  const [held, setHeld] = useState(false)
+  const [latched, setLatched] = useState(false)
+  // The microphone itself, which at this stage feeds a meter and a pair of
+  // headphones and nothing else. See `useMicInput`, and `SoundCheck` below for
+  // why it is worth having before there is anywhere for the voice to go.
+  const input = useMicInput()
+
+  /**
+   * The voice, out to the room.
+   *
+   * One connection per listener, held open for as long as the microphone is,
+   * rather than built when somebody starts talking: negotiating takes a second
+   * or two, and doing it on the talk button would lose the beginning of every
+   * break — the part with the greeting in it. What opens and closes with the
+   * button is a gain node inside `useMicInput`, which is instant.
+   */
+  // Everybody on the roster but this browser. Whoever runs the station is
+  // usually tuned in as well, and a console that called itself would spend the
+  // evening negotiating with its own microphone.
+  //
+  // Empty off air, which takes every connection down with it: the sound check
+  // still works for setting a level between broadcasts, but a room that is not
+  // being broadcast to has no business holding a path to a live microphone.
+  const room = useMemo(
+    () => (air?.live ? (listeners ?? []).filter((listener) => listener.id !== me) : []),
+    [air?.live, listeners, me],
+  )
+  const targets = useMemo(() => room.map((listener) => listener.id), [room])
+
+  const broadcast = useVoiceBroadcast({
+    connection,
+    me,
+    track: input.track,
+    targets,
+    iceServers,
+  })
+  useEffect(() => subscribe(broadcast.handleMessage), [subscribe, broadcast.handleMessage])
+  // What the slider shows while it is being dragged. The station's value is
+  // the truth, but a fader that only moved when the round trip landed would
+  // feel broken under the hand.
+  const [draft, setDraft] = useState<number | null>(null)
+
+  const live = mic?.live ?? false
+  const duckTo = draft ?? mic?.duckTo ?? MIN_DUCK
+  const onAir = air?.live ?? false
+  /**
+   * Off air is folded in here rather than only into the button, so the talk key
+   * is refused by the same rule the station refuses it by. Otherwise holding it
+   * with the doors shut would spend a request to be told 409 and put a refusal
+   * on the console for a mistake nobody made.
+   *
+   * It also covers the other direction: a broadcast ended mid-sentence takes
+   * the mic with it, and this is what lets go of the key on the console's side.
+   */
+  const wanted = (held || latched) && onAir
+
+  // A latch left down across the end of a broadcast would put the station on
+  // mic the instant it next went live, before anybody had touched anything.
+  useEffect(() => {
+    if (!onAir) setLatched(false)
+  }, [onAir])
+
+  /**
+   * What the room can actually hear, driven by what the station says rather
+   * than by the button.
+   *
+   * `live` is the mic state as broadcast — the same value every listener was
+   * sent and ducked to. Opening the voice on the local button instead would
+   * put sound on the air a round trip before anyone's music got out of its way,
+   * so the first word of every break would land on top of a full-volume song.
+   */
+  const setTalking = input.setTalking
+  useEffect(() => {
+    setTalking(live)
+  }, [live, setTalking])
+
+  /**
+   * Whether *this* card is the reason the mic is open.
+   *
+   * Not `mic.live`, which is the station's answer and can be true because
+   * another tab is holding it. Without the distinction, mounting this card
+   * beside an open mic would schedule a close for a break somebody else is in
+   * the middle of.
+   */
+  const engaged = useRef(false)
+  const hangover = useRef<number | null>(null)
+
+  // Kept in refs so the effect below runs on the press and the release, and on
+  // nothing else. It is what opens and shuts the mic; re-running it because a
+  // callback's identity changed would reopen a mic that had just been let go.
+  const handlers = useRef({ onOpen, onClose })
+  useEffect(() => {
+    handlers.current = { onOpen, onClose }
+  })
+
+  useEffect(() => {
+    if (wanted) {
+      // Re-engaging during the hangover: nothing to reopen, because the close
+      // has not happened yet. Cancelling the timer is the whole of it.
+      if (hangover.current !== null) {
+        window.clearTimeout(hangover.current)
+        hangover.current = null
+      }
+      if (engaged.current) return
+      engaged.current = true
+      handlers.current.onOpen()
+      return
+    }
+
+    if (!engaged.current) return
+    hangover.current = window.setTimeout(() => {
+      hangover.current = null
+      engaged.current = false
+      handlers.current.onClose()
+    }, MIC_HANGOVER_MS)
+  }, [wanted])
+
+  // Leaving the console mid-break must not leave the room ducked until the
+  // lease lapses. Ten seconds of a quiet song is a long time to explain.
+  useEffect(
+    () => () => {
+      if (hangover.current !== null) window.clearTimeout(hangover.current)
+      if (engaged.current) handlers.current.onClose()
+    },
+    [],
+  )
+
+  /**
+   * The lease. The station shuts a mic nobody is renewing, which is what keeps
+   * a console that died mid-sentence from ducking the room for the rest of the
+   * evening; this is the other half of that bargain.
+   */
+  useEffect(() => {
+    if (!live) return
+    const timer = window.setInterval(onRenew, MIC_RENEW_MS)
+    return () => window.clearInterval(timer)
+  }, [live, onRenew])
+
+  /**
+   * Hold `M` to talk.
+   *
+   * Not the spacebar, which is the obvious choice and the wrong one twice over:
+   * it scrolls, and it presses whatever button happens to have focus, so the
+   * key for going live would also be the key for skipping a track.
+   *
+   * `repeat` is ignored because a held key fires over and over, and `blur`
+   * releases because a key let go after switching windows never sends its
+   * keyup — which would otherwise leave the mic latched open by accident,
+   * exactly the failure push-to-talk exists to prevent.
+   */
+  useEffect(() => {
+    const typing = (target: EventTarget | null) =>
+      target instanceof HTMLElement && target.closest('input, textarea, [contenteditable]') !== null
+
+    const down = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== TALK_KEY) return
+      if (event.repeat || event.metaKey || event.ctrlKey || event.altKey) return
+      if (typing(event.target)) return
+      event.preventDefault()
+      setHeld(true)
+    }
+    const up = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== TALK_KEY) return
+      setHeld(false)
+    }
+    const release = () => setHeld(false)
+
+    window.addEventListener('keydown', down)
+    window.addEventListener('keyup', up)
+    window.addEventListener('blur', release)
+    return () => {
+      window.removeEventListener('keydown', down)
+      window.removeEventListener('keyup', up)
+      window.removeEventListener('blur', release)
+    }
+  }, [])
+
+  // Nothing to talk over, and the station refuses it anyway. Said rather than
+  // just greyed out, so it reads as "not yet" instead of "broken".
+  const shut = !onAir
+
+  return (
+    <section className="card card--mic">
+      <header className="card__head">
+        <h2 className="card__title">Mic</h2>
+        <span className={`mic__lamp${live ? ' mic__lamp--live' : ''}`} data-testid="mic-lamp">
+          {live ? 'ON MIC' : 'off'}
+        </span>
+      </header>
+
+      {/* Above the button, not below it. This is the one instruction here that
+          has to be read before the first press rather than after it: your own
+          browser is playing the music out loud, and an open mic over speakers
+          sends thirty people a smeared echo of the song they already have. */}
+      <p className="mic__warn">Headphones. On speakers the mic will feed back into the room.</p>
+
+      <div className="mic__controls">
+        <button
+          type="button"
+          className={`button mic__talk${live ? ' mic__talk--live' : ''}`}
+          data-testid="mic-talk"
+          disabled={shut}
+          // Pointer capture, so a press that slides off the button still ends
+          // when the finger lifts. Without it, dragging away swallows the
+          // release and the mic stays open until the lease runs out.
+          onPointerDown={(event) => {
+            event.currentTarget.setPointerCapture(event.pointerId)
+            setHeld(true)
+          }}
+          onPointerUp={() => setHeld(false)}
+          onPointerCancel={() => setHeld(false)}
+        >
+          {live ? 'On air — talking' : 'Hold to talk'}
+        </button>
+
+        <label className="mic__latch">
+          <input
+            type="checkbox"
+            data-testid="mic-latch"
+            checked={latched}
+            disabled={shut}
+            onChange={(event) => setLatched(event.target.checked)}
+          />
+          Latch
+        </label>
+      </div>
+
+      {/* Under the button it belongs to, and only while there is something to
+          show: a bar that never moves is worse than no bar, because it reads
+          as a mic that is not working rather than as one that is not open. */}
+      {input.status === 'live' && (
+        <div className="mic__meter" data-testid="mic-meter" role="presentation">
+          <div className="mic__meter-fill" ref={input.meterRef} data-clip="false" />
+        </div>
+      )}
+
+      <p className="mic__hint">
+        {shut ? 'Go live first; there is nothing to talk over.' : `Or hold ${TALK_KEY.toUpperCase()}.`}
+      </p>
+
+      {/* Only during a broadcast. Off air there are no connections by design,
+          and a list saying so would be reporting a decision as a fault. */}
+      {input.track !== null && onAir && <VoiceReach room={room} peers={broadcast.peers} />}
+
+      <label className="mic__duck">
+        <span className="mic__duck-label">
+          Music under the mic
+          <em data-testid="mic-duck-db">{decibels(duckTo)} dB</em>
+        </span>
+        <input
+          type="range"
+          data-testid="mic-duck"
+          min={Math.round(MIN_DUCK * 100)}
+          max={100}
+          value={Math.round(duckTo * 100)}
+          // Moves under the hand, commits on release. One request instead of
+          // forty, and forty broadcasts to the room instead of one.
+          onChange={(event) => setDraft(Number(event.target.value) / 100)}
+          onPointerUp={() => {
+            if (draft !== null) onDuck(draft)
+            setDraft(null)
+          }}
+          onKeyUp={() => {
+            if (draft !== null) onDuck(draft)
+            setDraft(null)
+          }}
+          onBlur={() => {
+            if (draft !== null) onDuck(draft)
+            setDraft(null)
+          }}
+        />
+      </label>
+
+      <SoundCheck input={input} />
+    </section>
+  )
+}
+
+/** Who can actually hear the mic. See `lib/reach.ts` for why this exists. */
+function VoiceReach({ room, peers }: { room: Listener[]; peers: PeerState[] }) {
+  const rows = orderByHealth(room, peers)
+  const hearing = hearingCount(rows)
+
+  if (room.length === 0) {
+    return (
+      <p className="reach__none" data-testid="mic-reach">
+        Nobody is tuned in yet.
+      </p>
+    )
+  }
+
+  return (
+    <div className="reach" data-testid="mic-reach">
+      <p className="reach__summary">
+        {hearing} of {room.length} hearing you
+      </p>
+      <ul className="reach__list">
+        {rows.map(({ listener, state }) => (
+          <li key={listener.id} className="reach__row" data-state={state}>
+            <span className={`reach__dot reach__dot--${HEALTH[state].tone}`} aria-hidden="true" />
+            <span className="reach__who">{listener.nickname}</span>
+            <span className="reach__state">{HEALTH[state].label}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+/**
+ * The microphone, before there is anywhere for it to go.
+ *
+ * Nothing here reaches a listener, and the card says so, because a set of mic
+ * controls that quietly did nothing would be the most confusing thing on this
+ * page. What it is for is the half of the problem that can be solved alone: is
+ * the browser giving up the microphone, is it the right microphone, and is the
+ * level somewhere sensible. Meeting that separately from "the connection will
+ * not establish" is the reason it is its own milestone.
+ *
+ * The mic is off until asked for, and asking is a button rather than something
+ * that happens on open. A console that grabbed the microphone the moment it
+ * loaded would put the browser's recording light on for the whole evening,
+ * including the parts spent queueing records.
+ */
+function SoundCheck({ input }: { input: MicInput }) {
+  const { status, error, devices, deviceId, onSpeakers, monitoring } = input
+  const live = status === 'live'
+
+  return (
+    <div className="soundcheck">
+      <div className="soundcheck__head">
+        <h3 className="soundcheck__title">Sound check</h3>
+        <button
+          type="button"
+          className="button button--quiet soundcheck__power"
+          data-testid="mic-power"
+          disabled={status === 'asking'}
+          onClick={() => (live ? input.close() : input.open())}
+        >
+          {status === 'asking' ? 'asking…' : live ? 'Turn mic off' : 'Turn mic on'}
+        </button>
+      </div>
+
+      {error && (
+        <p className="soundcheck__error" data-testid="mic-error">
+          {error}
+        </p>
+      )}
+
+      <label className="soundcheck__row">
+        <span>Input</span>
+        <select
+          data-testid="mic-device"
+          value={deviceId ?? ''}
+          onChange={(event) => input.choose(event.target.value === '' ? null : event.target.value)}
+        >
+          {/* First, and the default, because "whatever the system is pointed
+              at" is usually the right answer and survives a device being
+              unplugged. */}
+          <option value="">System default</option>
+          {devices.map((device) => (
+            <option key={device.id} value={device.id}>
+              {device.label}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <label className="soundcheck__check">
+        <input
+          type="checkbox"
+          data-testid="mic-speakers"
+          checked={onSpeakers}
+          onChange={(event) => input.setOnSpeakers(event.target.checked)}
+        />
+        {/* This is a constraints switch wearing a plain-English label. On
+            headphones echo cancellation is off, which is a noticeably better
+            voice; on speakers it goes back on and does real work. */}
+        I'm on speakers
+      </label>
+
+      <label className="soundcheck__check">
+        <input
+          type="checkbox"
+          data-testid="mic-monitor"
+          checked={monitoring}
+          // Monitoring into a speaker while a microphone is open is a feedback
+          // loop with nothing between the two ends of it. Refused rather than
+          // warned about: the failure is instant, loud, and in everybody's ears.
+          disabled={!live || onSpeakers}
+          onChange={(event) => input.setMonitoring(event.target.checked)}
+        />
+        Hear myself
+        {onSpeakers && <em className="soundcheck__why">— not on speakers</em>}
+      </label>
+
+      <p className="soundcheck__note">
+        The mic stays open while this is on, and the room only hears you while
+        the talk button is down.
+      </p>
+    </div>
+  )
+}
 
 /**
  * The headcount, and the one control on this panel that changes what the room

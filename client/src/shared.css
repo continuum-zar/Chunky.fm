@@ -289,6 +289,13 @@
   display: block;
 }
 
+/* A mic break, said out loud. The badge beside it is already red and stays
+   red — the station is still on the air — so this line is the only thing that
+   changes, and it borrows the same signal rather than introducing another. */
+.onair__where--mic {
+  color: var(--live-text);
+}
+
 /* --- the level meter ------------------------------------------------------ */
 
 .levels {
