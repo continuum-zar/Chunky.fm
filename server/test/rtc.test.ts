@@ -35,11 +35,22 @@ describe('iceServers', () => {
   it('carries the relay credentials alongside it', async () => {
     harness = await startHarness({
       stunUrls: ['stun:a:3478'],
-      turn: { url: 'turn:relay:3478', username: 'sam', credential: 'hunter2' },
+      turn: {
+        // What a provider actually hands you: the fast path, the one that
+        // survives a network with no UDP, and the one that gets through a
+        // firewall which only believes in HTTPS.
+        urls: ['turn:relay:3478', 'turn:relay:80?transport=tcp', 'turns:relay:443?transport=tcp'],
+        username: 'sam',
+        credential: 'hunter2',
+      },
     })
     expect(iceServers(harness.config)).toEqual([
       { urls: ['stun:a:3478'] },
-      { urls: 'turn:relay:3478', username: 'sam', credential: 'hunter2' },
+      {
+        urls: ['turn:relay:3478', 'turn:relay:80?transport=tcp', 'turns:relay:443?transport=tcp'],
+        username: 'sam',
+        credential: 'hunter2',
+      },
     ])
   })
 })
@@ -59,7 +70,7 @@ describe('GET /api/rtc', () => {
     // already allowed to hear the station and nobody else.
     harness = await startHarness({
       stationKey: 'a-real-key',
-      turn: { url: 'turn:relay:3478', username: 'sam', credential: 'hunter2' },
+      turn: { urls: ['turn:relay:3478'], username: 'sam', credential: 'hunter2' },
     })
     expect((await harness.app.inject({ method: 'GET', url: '/api/rtc' })).statusCode).toBe(401)
 

@@ -163,7 +163,22 @@ describe('finding another browser', () => {
   it('takes a relay as all three parts', () => {
     expect(
       loadConfig({ TURN_URL: 'turn:relay:3478', TURN_USERNAME: 'sam', TURN_CREDENTIAL: 'pw' }).turn,
-    ).toEqual({ url: 'turn:relay:3478', username: 'sam', credential: 'pw' })
+    ).toEqual({ urls: ['turn:relay:3478'], username: 'sam', credential: 'pw' })
+  })
+
+  it('takes every address a relay offers, which is the point of them', () => {
+    // A provider hands you four of these and the differences are the whole
+    // reason: UDP is the fast path, TCP survives a network that drops it, and
+    // TLS on 443 gets through a firewall that only believes in HTTPS. The
+    // listener who needs a relay is usually the one on a phone, which is
+    // exactly where the strict networks are.
+    expect(
+      loadConfig({
+        TURN_URL: 'turn:relay:3478, turn:relay:80?transport=tcp, turns:relay:443?transport=tcp',
+        TURN_USERNAME: 'sam',
+        TURN_CREDENTIAL: 'pw',
+      }).turn?.urls,
+    ).toEqual(['turn:relay:3478', 'turn:relay:80?transport=tcp', 'turns:relay:443?transport=tcp'])
   })
 
   it('refuses half a relay at boot rather than in somebody’s ears', () => {

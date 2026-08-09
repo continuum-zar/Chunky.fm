@@ -20,7 +20,7 @@ export function iceServers(config: Config): IceServer[] {
   if (config.stunUrls.length > 0) servers.push({ urls: config.stunUrls })
   if (config.turn) {
     servers.push({
-      urls: config.turn.url,
+      urls: config.turn.urls,
       username: config.turn.username,
       credential: config.turn.credential,
     })

@@ -80,8 +80,19 @@ export interface Config {
    */
   logLevel: string
   stunUrls: string[]
-  /** Null unless a relay is configured; see `stunUrls`. */
-  turn: { url: string; username: string; credential: string } | null
+  /**
+   * The relay, or null. See `stunUrls`.
+   *
+   * A list of URLs rather than one, sharing a set of credentials, because every
+   * relay worth using hands you several and the differences between them are
+   * the whole point: `turn:` over UDP is the fast path, the same host on TCP
+   * survives a network that drops UDP, and `turns:` on 443 gets through the
+   * kind of firewall that only believes in HTTPS. A station configured with the
+   * first of those alone works everywhere except the places a relay was needed
+   * for — which, since the listener who needs one is usually the one on a
+   * phone, is most of them.
+   */
+  turn: { urls: string[]; username: string; credential: string } | null
   clientDir: string | null
   /**
    * Who is allowed to tell the station where a request really came from.
@@ -217,14 +228,17 @@ function listFromEnv(value: string | undefined, fallback: string[]): string[] {
  * where somebody is looking.
  */
 function turnFromEnv(env: NodeJS.ProcessEnv): Config['turn'] {
-  const url = env.TURN_URL?.trim()
+  // Comma-separated, like STUN_URLS: a provider hands you four of these and
+  // giving the browser all of them is what lets it fall back from UDP to TCP
+  // to TLS on 443 as the network in front of a listener gets stricter.
+  const urls = listFromEnv(env.TURN_URL, [])
   const username = env.TURN_USERNAME?.trim()
   const credential = env.TURN_CREDENTIAL?.trim()
-  if (!url && !username && !credential) return null
-  if (!url || !username || !credential) {
+  if (urls.length === 0 && !username && !credential) return null
+  if (urls.length === 0 || !username || !credential) {
     throw new Error('TURN_URL, TURN_USERNAME and TURN_CREDENTIAL must be set together, or not at all')
   }
-  return { url, username, credential }
+  return { urls, username, credential }
 }
 
 function intFromEnv(value: string | undefined, fallback: number, name: string): number {

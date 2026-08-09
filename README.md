@@ -857,6 +857,17 @@ credential: a relay password in a JavaScript file is a relay anybody who loads
 the page can spend, from anywhere. It sits behind the listener gate, because
 both ends of a voice need it.
 
+**The listener who needs a relay is usually the one on a phone.** A desktop
+browser on the same network as the console meets it on a local or reflexive
+address and connects with STUN alone. A phone on cellular sits behind
+carrier-grade NAT, where the public address STUN reports differs for every
+destination — so the address it advertises is useless to the other end, and
+there is no direct path to find. Nothing but TURN fixes that. Give `TURN_URL`
+every address your provider hands you, not just the first: UDP is the fast path,
+TCP survives a network that drops UDP, and `turns:` on 443 gets through a
+firewall that only believes in HTTPS, and the strict networks are exactly where
+a relay was needed in the first place.
+
 **A failed connection is rebuilt, twice, then given up on.** Not an ICE restart:
 there is no transport state worth preserving here, and a listener answering a
 fresh offer on a fresh connection is a path the code already takes every time
