@@ -146,6 +146,82 @@ export interface Duck {
   at: number
 }
 
+/**
+ * Watches a listener's page for a voice actually arriving, before any of its
+ * script runs.
+ *
+ * Two instruments, because "the voice got here" and "the voice can be heard"
+ * are different claims and only the second one matters. The peer connection is
+ * wrapped to count incoming tracks, which says the negotiation finished; and
+ * `createMediaStreamSource` is wrapped to hang an analyser off whatever the
+ * page decides to play, which says sound is coming out of the far end of it.
+ *
+ * A connection that is up while the analyser reads zero is precisely the bug
+ * this exists to catch: a remote stream connected only to Web Audio is silent
+ * in Chrome, and the workaround for it is invisible from every other angle.
+ */
+export const INSTRUMENT_VOICE = `(() => {
+  window.__voice = { tracks: 0, states: [] }
+
+  var OriginalPC = window.RTCPeerConnection
+  window.RTCPeerConnection = function (config) {
+    var pc = new OriginalPC(config)
+    // The latest one, kept so its state can be *read* rather than only
+    // remembered: close() sets connectionState to 'closed' without firing
+    // connectionstatechange, so a teardown never appears in the history below.
+    window.__voicePc = pc
+    pc.addEventListener('track', function () { window.__voice.tracks++ })
+    pc.addEventListener('connectionstatechange', function () {
+      window.__voice.states.push(pc.connectionState)
+    })
+    return pc
+  }
+  window.RTCPeerConnection.prototype = OriginalPC.prototype
+
+  var create = AudioContext.prototype.createMediaStreamSource
+  AudioContext.prototype.createMediaStreamSource = function (stream) {
+    var node = create.call(this, stream)
+    var analyser = this.createAnalyser()
+    analyser.fftSize = 1024
+    node.connect(analyser)
+    // Held on window so nothing collects it while the test is watching.
+    window.__voiceAnalyser = analyser
+    window.__voiceSamples = new Uint8Array(analyser.fftSize)
+    return node
+  }
+  return true
+})()`
+
+export const VOICE_STATE = `(() => {
+  var seen = window.__voice || { tracks: 0, states: [] }
+  return {
+    tracks: seen.tracks,
+    states: seen.states,
+    current: window.__voicePc ? window.__voicePc.connectionState : null,
+  }
+})()`
+
+/** How loud the arriving voice is, or -1 if nothing has been played yet. */
+export const VOICE_LEVEL = `(() => {
+  var a = window.__voiceAnalyser
+  if (!a) return -1
+  a.getByteTimeDomainData(window.__voiceSamples)
+  var sum = 0
+  for (var i = 0; i < window.__voiceSamples.length; i++) {
+    var v = (window.__voiceSamples[i] - 128) / 128
+    sum += v * v
+  }
+  return Math.sqrt(sum / window.__voiceSamples.length)
+})()`
+
+export interface VoiceState {
+  tracks: number
+  /** Every state it passed through, which never includes a deliberate close. */
+  states: string[]
+  /** Where it stands right now, which is the only way a close is visible. */
+  current: string | null
+}
+
 export const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /* --- taking the station down and putting it back up ------------------------

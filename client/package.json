@@ -20,6 +20,7 @@
     "qa:admin": "tsx scripts/qa-admin.ts",
     "qa:mic": "tsx scripts/qa-mic.ts",
     "qa:soundcheck": "tsx scripts/qa-soundcheck.ts",
+    "qa:voice": "tsx scripts/qa-voice.ts",
     "qa:reconnect": "tsx scripts/qa-reconnect.ts",
     "qa:offline": "tsx scripts/qa-offline.ts",
     "qa:presence": "tsx scripts/qa-presence.ts",

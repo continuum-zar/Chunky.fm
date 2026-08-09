@@ -518,9 +518,31 @@ established. The DJ reconnecting does not interrupt a voice. Only a listener
 whose own socket dropped gets a new id, and that lands as a new roster entry the
 existing diff already offers to.
 
-Not covered by tests: the holdback queue and the readiness gating live in a
+Not covered by unit tests: the holdback queue and the readiness gating live in a
 hook, and this codebase tests the wire underneath hooks rather than the hooks
-themselves. The pure parts around it — ordering, health, peer plumbing — are.
+themselves. The pure parts around it — ordering, health, peer plumbing — are,
+and `npm run qa:voice` covers the whole path end to end in two real browsers.
+
+## Verifying it
+
+`qa:voice` is the one check that says two browsers can actually hear each other,
+and it is worth knowing what it separates. Everything under the mic is unit
+tested against a fake `RTCPeerConnection` and a fake `AudioContext`, which pins
+the shape of a negotiation and says nothing about whether sound comes out of the
+far end. So the script measures two different facts:
+
+- **the voice arrived** — the peer connection is wrapped, tracks are counted,
+  and `connectionState` is read rather than only remembered (`close()` sets it
+  without firing an event, so a teardown never appears in the history);
+- **the voice can be heard** — `createMediaStreamSource` is wrapped and an
+  analyser hung off whatever the page plays, so the level at the listener's end
+  is a number.
+
+A connection that is healthy while the analyser reads zero is exactly the
+failure this milestone was most warned about — a remote stream connected only to
+Web Audio is silent in Chrome — and it is invisible from every other angle.
+Chrome's `--use-fake-device-for-media-stream` makes the difference measurable
+without a person in the room, because it produces a tone rather than silence.
 
 ## M5 (original plan) — survive contact
 
