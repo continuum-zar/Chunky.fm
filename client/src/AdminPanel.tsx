@@ -493,9 +493,9 @@ function Controls({
   const entries = queue ?? []
 
   return (
-    <section className="console" data-testid="admin-panel">
+    <section className="console console--desk" data-testid="admin-panel">
       <header className="console__head">
-        <div>
+        <div className="console__ident">
           <h1 className="console__title">Broadcast Console</h1>
           <p className="console__blurb">
             Upload tracks, arrange the queue, and keep an eye on the room.
@@ -511,33 +511,33 @@ function Controls({
         </div>
       </header>
 
-      {error && (
-        <p className="console__error" data-testid="admin-error">
-          {error}
-        </p>
+      {(error || !connected) && (
+        <div className="console__banners">
+          {error && (
+            <p className="console__error" data-testid="admin-error">
+              {error}
+            </p>
+          )}
+
+          {/* Commands go over HTTP and still land while the socket is down, but
+              what the panel shows arrives on the socket, so say so rather than
+              quietly showing a queue that may have moved on. */}
+          {!connected && (
+            <p className="console__note" data-testid="admin-offline">
+              reconnecting; what's shown here may be out of date
+            </p>
+          )}
+        </div>
       )}
 
-      {/* Commands go over HTTP and still land while the socket is down, but
-          what the panel shows arrives on the socket, so say so rather than
-          quietly showing a queue that may have moved on. */}
-      {!connected && (
-        <p className="console__note" data-testid="admin-offline">
-          reconnecting; what's shown here may be out of date
-        </p>
-      )}
-
-      <DropZone onFiles={upload} />
-
-      {uploads.length > 0 && (
-        <ul className="uploads" data-testid="admin-uploads">
-          {uploads.map((line) => (
-            <li key={line.id}>{line.line}</li>
-          ))}
-        </ul>
-      )}
-
+      {/* Three columns, and the split is the work rather than the components:
+          what this machine is doing (the mic, and the night after this one),
+          what is going out (the decks, and everything they can reach for), and
+          who it is going out to. Each one scrolls inside itself, so the desk is
+          a screen you look at rather than a page you scroll: the talk button
+          and the transport are never below the fold while you read the room. */}
       <div className="console__columns">
-        <div className="console__stack">
+        <div className="console__column console__column--desk">
           {/* First, because it is the one control here that is held rather than
               clicked, and the one that is reached for without looking. */}
           <MicCard
@@ -554,30 +554,10 @@ function Controls({
             onRenew={renewMic}
             onDuck={setDuck}
           />
-          <QueueCard
-            entries={entries}
-            state={state}
-            track={track}
-            paused={paused}
-                  busy={busy}
-            serverNow={serverNow}
-            command={command}
-            queueAction={queueAction}
-            api={api}
-          />
-          <WishesCard book={book} busy={busy} onMark={(id, status) =>
-            run(async () => setBook(await api.markWish(id, status)))
-          } />
-          <LibraryCard
-            tracks={tracks}
-            busy={busy}
-            onQueue={(id) => queueAction(() => api.enqueue(id))}
-            onPlay={(id) => command({ action: 'play', trackId: id })}
-          />
-          {/* Last, and deliberately. Everything above it drives a broadcast
-              that is happening or is about to; this is about a night that has
-              not, and it is the one thing on the panel nobody needs to reach
-              during a set. */}
+          {/* Last in this column, and deliberately. Everything else on the
+              panel drives a broadcast that is happening or is about to; this is
+              about a night that has not, and it is the one thing here nobody
+              needs to reach during a set. */}
           <ScheduleCard
             schedule={schedule}
             busy={busy}
@@ -588,7 +568,40 @@ function Controls({
           />
         </div>
 
-        <CommentsCard messages={messages} muted={muted} busy={busy} onMute={mute} />
+        <div className="console__column console__column--air">
+          <QueueCard
+            entries={entries}
+            state={state}
+            track={track}
+            paused={paused}
+            busy={busy}
+            serverNow={serverNow}
+            command={command}
+            queueAction={queueAction}
+            api={api}
+          />
+          {/* The library takes whatever height is left, and the drop zone sits
+              on it as a header rather than as the widest thing on the page:
+              uploading is the rarest thing anybody does here and it had been
+              given the best real estate on the desk. */}
+          <LibraryCard
+            tracks={tracks}
+            busy={busy}
+            onQueue={(id) => queueAction(() => api.enqueue(id))}
+            onPlay={(id) => command({ action: 'play', trackId: id })}
+            onFiles={upload}
+            uploads={uploads}
+          />
+        </div>
+
+        <div className="console__column console__column--room">
+          {/* Above the room, and beside the library: a wish is read here and
+              answered by queueing something from the column to the left. */}
+          <WishesCard book={book} busy={busy} onMark={(id, status) =>
+            run(async () => setBook(await api.markWish(id, status)))
+          } />
+          <CommentsCard messages={messages} muted={muted} busy={busy} onMute={mute} />
+        </div>
       </div>
     </section>
   )
@@ -1192,7 +1205,7 @@ function ScheduleCard({
   const shown = preview ?? posterUrl(schedule)
 
   return (
-    <section className="card">
+    <section className="card card--schedule">
       <header className="card__head">
         <h2 className="card__title">Next session</h2>
         {schedule && (
@@ -1489,6 +1502,11 @@ function ShareInvite({ api }: { api: AdminApi }) {
  * one: a click opens the picker and a drop takes the files directly. It is a
  * label wrapping a real file input rather than a div with a click handler,
  * because that is what gives it a keyboard and a screen reader for free.
+ *
+ * A strip across the top of the library rather than the block it used to be.
+ * Uploading is the rarest thing anybody does at this desk and it had been given
+ * the widest, tallest element on the page; the whole strip is still one target,
+ * which is what the gesture actually needs.
  */
 function DropZone({ onFiles }: { onFiles: (files: File[]) => Promise<void> }) {
   const [over, setOver] = useState(false)
@@ -1513,10 +1531,12 @@ function DropZone({ onFiles }: { onFiles: (files: File[]) => Promise<void> }) {
       onDrop={drop}
     >
       <span className="dropzone__badge">
-        <img src={uploadIcon} alt="" width={24} height={24} />
+        <img src={uploadIcon} alt="" width={18} height={18} />
       </span>
-      <span className="dropzone__headline">Drop MP3 files here</span>
-      <span className="dropzone__detail">or click to browse. Files are added to the queue</span>
+      <span className="dropzone__say">
+        <span className="dropzone__headline">Drop MP3 files here</span>
+        <span className="dropzone__detail">or click to browse. Files are added to the queue</span>
+      </span>
       <input
         type="file"
         className="dropzone__input"
@@ -1869,25 +1889,47 @@ function WishesCard({
   )
 }
 
-/** Everything the station has to play. */
+/**
+ * Everything the station has to play, and the way to add to it.
+ *
+ * The card takes whatever height the column has left over and scrolls inside
+ * itself: a station with two hundred records should not be a page that scrolls
+ * the transport out of sight to reach the fifth one.
+ */
 function LibraryCard({
   tracks,
   busy,
   onQueue,
   onPlay,
+  onFiles,
+  uploads,
 }: {
   tracks: Track[]
   busy: boolean
   onQueue(id: number): void
   onPlay(id: number): void
+  onFiles(files: File[]): Promise<void>
+  /** What the last upload did, a line per file. */
+  uploads: { id: number; line: string }[]
 }) {
   return (
-    <section className="card">
+    <section className="card card--library">
       <header className="card__head">
         <h2 className="card__title">
           Library <span className="card__count">({tracks.length})</span>
         </h2>
       </header>
+
+      <DropZone onFiles={onFiles} />
+
+      {uploads.length > 0 && (
+        <ul className="uploads" data-testid="admin-uploads">
+          {uploads.map((line) => (
+            <li key={line.id}>{line.line}</li>
+          ))}
+        </ul>
+      )}
+
       {tracks.length === 0 ? (
         <p className="card__empty">Nothing uploaded yet.</p>
       ) : (

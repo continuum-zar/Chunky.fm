@@ -1747,29 +1747,46 @@ h2 {
 .console {
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 20px;
   min-width: 0;
 }
 
+/* Ruled off from the desk below it, so the title and the four controls beside
+   it read as the console's own chrome rather than as the first card. */
 .console__head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 24px;
+  padding-bottom: 14px;
+  border-bottom: 0.8px solid rgb(255 255 255 / 6%);
+}
+
+.console__ident {
+  min-width: 0;
 }
 
 .console__title {
-  font-size: 22px;
+  font-size: 20px;
   font-weight: 600;
-  line-height: 33px;
+  line-height: 30px;
   color: var(--fg);
 }
 
 .console__blurb {
-  margin: 4px 0 0;
+  margin: 2px 0 0;
   color: var(--faint);
-  font-size: 13px;
-  line-height: 19.5px;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+/* Anything the desk has to say for itself, above the columns and out of their
+   way: a banner inside one of them would push that column's cards down and
+   leave the other two lying about where the tops of things are. */
+.console__banners {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .console__note {
@@ -1780,7 +1797,7 @@ h2 {
 
 .console__actions {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 8px;
   flex-wrap: wrap;
   justify-content: flex-end;
@@ -1932,21 +1949,145 @@ h2 {
   font-size: 12px;
 }
 
-/* The queue and the library on the left, the room on the right: the same
-   split the design draws, and the same one the work has: what goes out, and
-   who it is going out to. */
+/* --- the three columns -------------------------------------------------------
+ *
+ * The split is the work rather than the components. This machine (the mic, and
+ * the night after this one), what is going out (the decks and everything they
+ * can reach for), and who it is going out to.
+ *
+ * It used to be two, with five cards stacked in the left one and a single card
+ * in the right, which made the console a two-thousand-pixel scroll beside a
+ * column of empty sheet: the talk button and the transport went below the fold
+ * the moment you looked at the library. Three columns is what makes the whole
+ * desk one screen.
+ */
 .console__columns {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 24px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
   align-items: start;
+  min-width: 0;
 }
 
-.console__stack {
+.console__column {
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 20px;
   min-width: 0;
+}
+
+/* One column, and the cards in the order somebody stacked on a phone actually
+ * wants them, which is not the order the three columns put them in: the mic,
+ * then the decks, then the room, and the night after this one at the bottom.
+ *
+ * `display: contents` is what makes that possible without a second copy of the
+ * markup — the three column wrappers stop being boxes and their cards become
+ * the stack's own children, which is the only way `order` can reach across
+ * them. Above this width they are boxes again and nothing is reordered. */
+@media (max-width: 999px) {
+  .console__columns {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .console__column {
+    display: contents;
+  }
+
+  .console__column--air > .card {
+    order: 2;
+  }
+
+  .console__column--room > .card {
+    order: 3;
+  }
+
+  /* Last, wherever it was written: nobody reaches for next week during a set. */
+  .card--schedule {
+    order: 4;
+  }
+}
+
+/* Wide enough for two columns, but not for three.
+ *
+ * The mic beside the decks, and the room as a band under both, rather than the
+ * two of them stacked in one column with the whole of the second left empty —
+ * which is what a naive fold of three columns into two gives you, and it is the
+ * shape this console already had.
+ *
+ * Nothing is moved out of the order it is written in. A grid that put the third
+ * column's cards visually above the second's would leave a keyboard tabbing
+ * through this desk in an order nobody could see. */
+@media (min-width: 1000px) and (max-width: 1279px) {
+  .console__columns {
+    grid-template-columns: minmax(300px, 0.8fr) minmax(0, 1.2fr);
+  }
+
+  .console__column--room {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    align-items: start;
+  }
+}
+
+/* --- the desk, on one screen -------------------------------------------------
+ *
+ * Three columns, and the page stops scrolling: each column is its own scroller,
+ * so the transport stays where it was put while the room is read and the
+ * library is dug through. Heights come from the flex chain rather than from a
+ * constant subtracted off `100dvh`, because the chrome above this (the shell's
+ * padding, the top bar, the console's own header) is three separate numbers
+ * that would all have to be kept in step by hand.
+ *
+ * `:has` is what keeps this off the listener page, which is a scroll on
+ * purpose. Where it is not supported nothing here applies and the console is
+ * the ordinary three-column page it is below this width, which is a fair
+ * fallback rather than a broken one.
+ */
+@media (min-width: 1280px) {
+  .console__columns {
+    grid-template-columns:
+      minmax(300px, 0.85fr)
+      minmax(0, 1.35fr)
+      minmax(300px, 0.95fr);
+    align-items: stretch;
+  }
+
+  .station:has(.console--desk) {
+    height: 100dvh;
+  }
+
+  .station__main:has(.console--desk) {
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .console--desk {
+    flex: 1;
+    min-height: 0;
+  }
+
+  .console--desk .console__columns {
+    flex: 1;
+    min-height: 0;
+  }
+
+  /* Each column takes the scrolling its own cards would otherwise hand to the
+     page. The gutter is held open whether or not it is scrolling, so a card
+     does not shift sideways when a track is queued. */
+  .console__column {
+    min-height: 0;
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+  }
+
+  /* Except the room, which does not scroll as a column: the wishes sit at a
+     height of their own and the conversation underneath them takes the rest,
+     scrolling inside itself the way a conversation should. */
+  .console__column--room {
+    overflow: hidden;
+  }
 }
 
 /* --- the door -------------------------------------------------------------- */
@@ -2031,21 +2172,26 @@ h2 {
 
 /* --- the drop zone ---------------------------------------------------------
  *
- * A label around a real file input, so the whole rectangle is the target for a
+ * A label around a real file input, so the whole strip is the target for a
  * mouse, a keyboard and a screen reader alike, and a drop lands on it too.
+ *
+ * A strip across the top of the library rather than the 165px block it was.
+ * The block was the widest and tallest thing on the console, above everything,
+ * for the rarest thing anybody does here: the desk opens on a night that is
+ * already running far more often than on one being loaded in. Laid down, it is
+ * still one target the full width of the column, which is what the gesture
+ * needs; what it stops being is the first thing the eye lands on.
  */
 
 .dropzone {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  justify-content: center;
   gap: 12px;
-  padding: 40px;
-  border: 1.6px dashed rgb(255 255 255 / 15%);
-  border-radius: 16px;
-  background: rgb(23 23 23 / 40%);
-  text-align: center;
+  margin: 12px 16px 0;
+  padding: 10px 14px;
+  border: 1.4px dashed rgb(255 255 255 / 14%);
+  border-radius: 12px;
+  background: rgb(255 255 255 / 2%);
   cursor: pointer;
   transition:
     border-color 120ms ease,
@@ -2055,6 +2201,7 @@ h2 {
 .dropzone:hover,
 .dropzone:focus-within {
   border-color: rgb(255 255 255 / 30%);
+  background: rgb(255 255 255 / 4%);
 }
 
 /* Something is being dragged over it right now. */
@@ -2065,9 +2212,10 @@ h2 {
 
 .dropzone__badge {
   display: grid;
+  flex: none;
   place-items: center;
-  width: 48px;
-  height: 48px;
+  width: 32px;
+  height: 32px;
   border-radius: var(--pill);
   background: var(--raised);
 }
@@ -2076,17 +2224,26 @@ h2 {
   display: block;
 }
 
+.dropzone__say {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
 .dropzone__headline {
-  color: var(--fg);
-  font-size: 15px;
+  color: var(--fg-soft);
+  font-size: 13px;
   font-weight: 600;
-  line-height: 22.5px;
+  line-height: 19.5px;
 }
 
 .dropzone__detail {
   color: var(--faint);
-  font-size: 12px;
-  line-height: 18px;
+  font-size: 11px;
+  line-height: 16.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Hidden, not absent: the input is what actually opens the picker, and what
@@ -2100,11 +2257,12 @@ h2 {
 }
 
 .uploads {
-  margin: 0;
+  margin: 8px 16px 0;
   padding: 0;
   list-style: none;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
+  line-height: 16.5px;
 }
 
 /* --- cards -----------------------------------------------------------------
@@ -2457,18 +2615,39 @@ h2 {
   list-style: none;
 }
 
-.wish-book__row,
 .library__row {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 10px;
   padding: 8px;
   border-radius: 14px;
   font-size: 13px;
 }
 
-.library__row {
-  align-items: center;
+/* Who asked and when on the first line, what they asked for on the second.
+   Laid out in one row it needed a time, a name, a sentence and a button to fit
+   across a column, and in the room's column — the narrowest of the three — the
+   sentence lost every time, wrapping to three words a line beside a button it
+   had pushed to the edge. Stacked, the wish reads like the message it is. */
+.wish-book__row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 2px 8px;
+  padding: 8px;
+  border-radius: 14px;
+  font-size: 13px;
+}
+
+/* Both placed rather than flowed: the mark comes after the wish in the markup,
+   because that is the order it is read in, and left to find its own cell it
+   would drop to a third row of its own below the words. */
+.wish-book__row .card__link {
+  grid-area: 1 / 3;
+}
+
+.wish-book__text {
+  grid-area: 2 / 1 / 3 / -1;
 }
 
 .wish-book__row:hover,
@@ -2485,8 +2664,8 @@ h2 {
 }
 
 .wish-book__nick {
-  flex: none;
-  max-width: 7rem;
+  justify-self: start;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2498,7 +2677,6 @@ h2 {
 /* Somebody else's words: break them rather than letting a wall of characters
    stretch the column. */
 .wish-book__text {
-  flex: 1;
   min-width: 0;
   color: var(--fg-dim);
   overflow-wrap: anywhere;
@@ -2845,13 +3023,12 @@ h2 {
  */
 
 .card--comments {
-  /* Tall enough to be a conversation, capped so the console stays one screen
-     of work rather than a page you scroll to reach the library. Sticky, so the
-     room stays in view while the queue and the library scroll past it, which
-     is the point of having it open at all. */
-  position: sticky;
-  top: 24px;
-  max-height: calc(100vh - 48px);
+  /* Tall enough to be a conversation, capped so the console stays one screen of
+     work rather than a page you scroll to reach the library. On a desk it takes
+     whatever its column has left under the wishes and scrolls inside itself;
+     below that width it is a card in a stack like any other, with a cap so a
+     busy room does not bury everything under it. */
+  max-height: 480px;
 }
 
 .comments {
@@ -2984,18 +3161,55 @@ h2 {
   overflow-wrap: anywhere;
 }
 
+/* --- what gives, on a desk ---------------------------------------------------
+ *
+ * With the page no longer scrolling, every column has a fixed height and
+ * something in it has to be the part that gives. One card per column takes the
+ * slack and scrolls inside itself; the rest keep the size their contents ask
+ * for. Which card gives is the one you dig through rather than the one you
+ * reach for: the library, not the transport; the conversation, not the wishes.
+ */
+
+@media (min-width: 1280px) {
+  /* Nothing above the list may be scrolled away: the heading is what says which
+     of these lists you are looking at, and the transport is the reason the
+     queue card is at the top of its column at all. */
+  .card--library,
+  .card--comments {
+    flex: 1 1 auto;
+    min-height: 180px;
+    max-height: none;
+    overflow: hidden;
+  }
+
+  .library,
+  .comments {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  /* The running order is the queue card's own give. A long one scrolls rather
+     than pushing the library out of the column, and it keeps enough rows to
+     read a set at a glance before it does. */
+  .queue {
+    max-height: 40vh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  /* Same, one column over: the wishes are read, not dug through, so they cap
+     early and leave the rest of the height to the room. */
+  .wish-book {
+    max-height: 30vh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+}
+
 /* --- narrower windows ------------------------------------------------------ */
 
 @media (max-width: 1000px) {
-  .console__columns {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .card--comments {
-    position: static;
-    max-height: 480px;
-  }
-
   /* No hover to reveal them on a touch screen, so they are simply there. */
   .queue__moves {
     opacity: 1;
