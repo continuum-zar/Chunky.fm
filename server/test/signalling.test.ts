@@ -272,6 +272,46 @@ describe('the shape of a signalling frame', () => {
   })
 })
 
+describe('a socket that signed in after it connected', () => {
+  /**
+   * The bug this pins, which reached a deployed station before anyone saw it.
+   *
+   * A socket presents its credentials once, on the upgrade, and the console
+   * opens its socket when the page loads — which is before anybody has typed a
+   * password. So signing in afterwards leaves a connection the station does not
+   * recognise as the decks, on a page where everything else works perfectly,
+   * because every command goes over HTTP and HTTP does carry the cookie.
+   *
+   * The only thing that breaks is offering a listener a voice, and it breaks in
+   * silence: the offer is refused, no answer comes back, and the connection sits
+   * at "connecting" for the rest of the evening. Nothing on either screen says
+   * why. Hence `decks` on the `you` frame — the one way a browser can find out
+   * what it presented on an upgrade it did not write.
+   */
+  it('is told it is not the decks', async () => {
+    const before = await listener()
+    const you = (await before.waitFor((m) => m.type === 'you')) as YouMessage
+    expect(you.decks).toBe(false)
+  })
+
+  it('is told it is, when the credentials were there on the way in', async () => {
+    const console_ = await decks()
+    const you = (await console_.waitFor((m) => m.type === 'you')) as YouMessage
+    expect(you.decks).toBe(true)
+  })
+
+  it('is refused, so a client that ignored the flag still cannot reach anyone', async () => {
+    // The flag is a diagnosis, not the gate. The gate is the same one it always
+    // was, and it does not soften because the browser has since signed in.
+    const late = await listener()
+    const sam = await listener()
+
+    late.send({ type: 'signal', to: await whoAmI(sam), payload: { kind: 'offer', sdp: 'x' } })
+
+    expect(await nextError(late)).toMatchObject({ code: 'not_the_decks' })
+  })
+})
+
 describe('who counts as the decks', () => {
   it('is decided on the upgrade, from the credentials the browser already sends', async () => {
     // The same question `requireAdmin` asks of an HTTP request, asked of the

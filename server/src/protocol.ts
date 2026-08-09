@@ -24,6 +24,22 @@ import { type Wish, WISH_MAX_LENGTH, normalizeWishText } from './wishes.js'
 export interface YouMessage {
   type: 'you'
   id: number
+  /**
+   * Whether the station considers this socket the decks.
+   *
+   * Here because a socket cannot change its mind about who it is, and a browser
+   * has no way to know what it presented on an upgrade it did not write. The
+   * console opens its socket when the page loads, which is *before* anybody has
+   * signed in, so a sign-in that happens afterwards leaves a connection that
+   * carries no admin cookie and never will. Everything else about the console
+   * keeps working — commands go over HTTP, which does carry it — and the only
+   * symptom is that no listener can be offered a voice, silently.
+   *
+   * So the station says so, and the client reconnects to get a socket that
+   * carries what it now has. Without this the page has to guess, and guessing
+   * means either reconnecting every time it signs in or never noticing.
+   */
+  decks: boolean
 }
 
 /**
@@ -419,8 +435,8 @@ export function micMessage(snapshot: MicSnapshot): MicMessage {
   return { type: 'mic', ...snapshot }
 }
 
-export function youMessage(id: number): YouMessage {
-  return { type: 'you', id }
+export function youMessage(id: number, decks: boolean): YouMessage {
+  return { type: 'you', id, decks }
 }
 
 export function signalMessage(from: number, payload: unknown): SignalMessage {

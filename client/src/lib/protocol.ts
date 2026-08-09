@@ -26,6 +26,19 @@ export interface Track {
 export interface YouMessage {
   type: 'you'
   id: number
+  /**
+   * Whether the station considers this socket the decks.
+   *
+   * A socket presents its credentials once, on the upgrade, and cannot change
+   * its mind afterwards. The console opens its socket when the page loads,
+   * which is before anybody has signed in — so a sign-in that happens after
+   * that leaves a connection carrying no admin cookie, on a page that otherwise
+   * works perfectly, because commands go over HTTP and HTTP does carry it.
+   *
+   * The only symptom is that no listener can be offered a voice, and it is
+   * silent. This is how the page finds out, and what tells it to reconnect.
+   */
+  decks: boolean
 }
 
 /**

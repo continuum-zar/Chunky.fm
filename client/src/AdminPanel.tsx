@@ -89,6 +89,13 @@ export interface AdminPanelProps {
   connection: StationConnection | null
   /** This console's own id, so it never offers itself a microphone. */
   me: number | null
+  /**
+   * Signed in, but the station does not see this socket as the decks.
+   *
+   * Which means no listener can be offered a voice, on a console where
+   * everything else works. Said out loud because it is otherwise invisible.
+   */
+  deaf: boolean
   /** How to reach another browser, or null until `/api/rtc` has answered. */
   iceServers: RTCIceServer[] | null
   /** Read the socket. This page can be both ends of a voice; see App. */
@@ -138,6 +145,7 @@ export function AdminPanel({
   mic,
   connection,
   me,
+  deaf,
   iceServers,
   subscribe,
   serverNow,
@@ -177,6 +185,7 @@ export function AdminPanel({
       mic={mic}
       connection={connection}
       me={me}
+      deaf={deaf}
       iceServers={iceServers}
       subscribe={subscribe}
       serverNow={serverNow}
@@ -266,6 +275,13 @@ interface ControlsProps {
   mic: MicSnapshot | null
   connection: StationConnection | null
   me: number | null
+  /**
+   * Signed in, but the station does not see this socket as the decks.
+   *
+   * Which means no listener can be offered a voice, on a console where
+   * everything else works. Said out loud because it is otherwise invisible.
+   */
+  deaf: boolean
   iceServers: RTCIceServer[] | null
   subscribe(reader: (message: ServerMessage) => void): () => void
   serverNow(): number
@@ -291,6 +307,7 @@ function Controls({
   mic,
   connection,
   me,
+  deaf,
   iceServers,
   subscribe,
   serverNow,
@@ -528,6 +545,7 @@ function Controls({
             air={air}
             connection={connection}
             me={me}
+            deaf={deaf}
             listeners={listeners}
             iceServers={iceServers}
             subscribe={subscribe}
@@ -607,6 +625,7 @@ function MicCard({
   air,
   connection,
   me,
+  deaf,
   listeners,
   iceServers,
   subscribe,
@@ -619,6 +638,13 @@ function MicCard({
   air: AirSnapshot | null
   connection: StationConnection | null
   me: number | null
+  /**
+   * Signed in, but the station does not see this socket as the decks.
+   *
+   * Which means no listener can be offered a voice, on a console where
+   * everything else works. Said out loud because it is otherwise invisible.
+   */
+  deaf: boolean
   listeners: Listener[] | null
   iceServers: RTCIceServer[] | null
   subscribe(reader: (message: ServerMessage) => void): () => void
@@ -822,6 +848,18 @@ function MicCard({
           browser is playing the music out loud, and an open mic over speakers
           sends thirty people a smeared echo of the song they already have. */}
       <p className="mic__warn">Headphones. On speakers the mic will feed back into the room.</p>
+
+      {/* The one failure on this card that nothing else would ever show. The
+          mic opens, the room ducks, the meter moves, and not one listener can
+          be offered a voice, because this browser's connection to the station
+          was made before it signed in and cannot be told otherwise. */}
+      {deaf && (
+        <p className="mic__broken" data-testid="mic-deaf">
+          This browser signed in after it connected, and reconnecting did not take.
+          Reload the page: until then the mic will duck the room and nobody will
+          hear you.
+        </p>
+      )}
 
       <div className="mic__controls">
         <button

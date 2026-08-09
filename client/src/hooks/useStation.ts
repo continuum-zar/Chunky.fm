@@ -55,6 +55,15 @@ export interface Station {
    */
   me: number | null
   /**
+   * Whether the station considers this socket the decks.
+   *
+   * Null until the first frame. Signing in *after* the page loaded leaves a
+   * socket that presented no admin cookie, and this is the only way the page
+   * can tell — everything else about the console goes over HTTP and keeps
+   * working. See `epoch` on `useStation`.
+   */
+  decks: boolean | null
+  /**
    * When the station is next on, or null when nothing is announced.
    *
    * The other half of the sentence `air` starts, and the one thing here that
@@ -143,15 +152,25 @@ export interface Station {
 }
 
 /** Holds the websocket open and tracks the station's broadcast state. */
+/**
+ * @param epoch Bump to throw the socket away and open a new one.
+ *
+ * There is exactly one reason to: a socket presents its cookies once, on the
+ * upgrade, and cannot change its mind. Signing in to the console after the page
+ * has loaded leaves a connection the station does not recognise as the decks,
+ * and the only way to fix that is a new connection. See `decks`.
+ */
 export function useStation(
   url: string = defaultStationUrl(),
   onMessage?: (message: ServerMessage) => void,
+  epoch = 0,
 ): Station {
   const [status, setStatus] = useState<StationStatus>('connecting')
   const [reach, setReach] = useState<Availability>(INITIALLY)
   const [state, setState] = useState<StateMessage | null>(null)
   const [air, setAir] = useState<AirSnapshot | null>(null)
   const [me, setMe] = useState<number | null>(null)
+  const [decks, setDecks] = useState<boolean | null>(null)
   const [schedule, setSchedule] = useState<ScheduledSession | null>(null)
   const [mic, setMic] = useState<MicSnapshot | null>(null)
   const [queue, setQueue] = useState<QueueEntry[] | null>(null)
@@ -179,8 +198,10 @@ export function useStation(
     // And its own answer to whether anybody is talking over it.
     setMic(null)
     // A new socket is a new row in the roster, so whatever this page was called
-    // on the last one says nothing about what it is called on this one.
+    // on the last one says nothing about what it is called on this one, and
+    // nothing about what it presented on the way in.
     setMe(null)
+    setDecks(null)
     const station = new StationConnection({
       url,
       onStatus: (next) => {
@@ -188,7 +209,10 @@ export function useStation(
         setReach((current) => nextAvailability(current, next))
       },
       onMessage: (message) => {
-        if (message.type === 'you') setMe(message.id)
+        if (message.type === 'you') {
+          setMe(message.id)
+          setDecks(message.decks)
+        }
         if (message.type === 'state') setState(message)
         if (message.type === 'air') setAir({ live: message.live, since: message.since })
         if (message.type === 'schedule') setSchedule(message.schedule)
@@ -231,7 +255,7 @@ export function useStation(
       station.close()
       setConnection(null)
     }
-  }, [url])
+  }, [url, epoch])
 
   const applyState = useCallback(
     (snapshot: PlaybackSnapshot) => setState({ type: 'state', ...snapshot }),
@@ -256,6 +280,7 @@ export function useStation(
     state,
     air,
     me,
+    decks,
     schedule,
     mic,
     queue,

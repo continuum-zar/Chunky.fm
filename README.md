@@ -815,6 +815,22 @@ station. Both ends need it: the decks must know which id *not* to offer to,
 since whoever runs the station is usually tuned in as well, and a listener
 answering an offer has to know the id it read is somebody else's.
 
+That frame also carries whether the station considers this socket the decks,
+and the reason is a bug that reached a deployed station before anyone saw it.
+**A socket presents its credentials once, on the upgrade** — and the console
+opens its socket when the page loads, which is before anybody has typed a
+password. So signing in afterwards leaves a connection the station does not
+recognise as the decks, on a page where everything else works perfectly,
+because every command goes over HTTP and HTTP does carry the cookie.
+
+The only thing that breaks is offering a listener a voice, and it breaks in
+silence: the offer is refused, no answer comes back, and the connection sits at
+`connecting` for the rest of the evening while the room ducks obediently for a
+voice nobody can hear. So the station says which it thinks you are, and the
+console opens a fresh socket once per change of mind — in both directions,
+since signing *out* leaves a socket that still holds the privilege. If a
+reconnect does not settle it, the console says so rather than retrying forever.
+
 Two things about this bit up front, because both cost an afternoon otherwise:
 
 - **`MAX_PAYLOAD_BYTES` was 4 KiB and an SDP description does not fit.** The

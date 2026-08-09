@@ -485,7 +485,7 @@ export function attachRealtime({
     // First of all, and about this socket rather than about the station: an
     // offer is addressed to an id, and both ends need to know which id is
     // theirs before any of the rest of this means anything. See `YouMessage`.
-    send(socket, youMessage(listenerId))
+    send(socket, youMessage(listenerId, deckSockets.has(listenerId)))
 
     // Whether there is a broadcast at all comes before what is on it: a page
     // told the decks are empty without being told the station is off air would

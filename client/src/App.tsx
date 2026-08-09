@@ -239,6 +239,19 @@ function Station({ route: requested, session }: { route: Route; session: AdminSe
    * for the voice it is hearing. The socket has one handler, so the fan-out has
    * to happen somewhere, and here is the only place that can see both.
    */
+  /**
+   * Bumped to throw the socket away and open a new one.
+   *
+   * There is exactly one reason to. A socket presents its cookies once, on the
+   * upgrade, and the console's socket opens when the page loads — which is
+   * before anybody has signed in. So signing in leaves a connection the station
+   * does not recognise as the decks, on a page where everything else works,
+   * because every command goes over HTTP and HTTP does carry the cookie. The
+   * only thing that breaks is offering a listener a voice, and it breaks
+   * silently: the offer is refused, no answer comes back, and the connection
+   * sits at "connecting" for the rest of the evening.
+   */
+  const [socketEpoch, setSocketEpoch] = useState(0)
   const readers = useRef(new Set<(message: ServerMessage) => void>())
   const subscribe = useCallback((reader: (message: ServerMessage) => void) => {
     readers.current.add(reader)
@@ -269,10 +282,15 @@ function Station({ route: requested, session }: { route: Route; session: AdminSe
     mic,
     applyMic,
     me,
-  } = useStation(undefined, (message) => {
-    routeToClock.current(message)
-    for (const reader of readers.current) reader(message)
-  })
+    decks,
+  } = useStation(
+    undefined,
+    (message) => {
+      routeToClock.current(message)
+      for (const reader of readers.current) reader(message)
+    },
+    socketEpoch,
+  )
   const admin = isConsole(requested)
   const clock = useServerClock(connection, { connected: status === 'connected' })
   // Only once tuned in: a socket is open from the moment the page loads, and a
@@ -328,6 +346,49 @@ function Station({ route: requested, session }: { route: Route; session: AdminSe
    * the gain stage does not exist until the join click, so there is nowhere to
    * play a voice and no woken context to play it through.
    */
+  /**
+   * Get a socket that carries what this browser now has.
+   *
+   * Once per sign-in, and only when the station has actually said this socket
+   * is not the decks — so a console opened with a session already in the
+   * browser reconnects not at all, and one that just signed in reconnects
+   * exactly once. The guard is what keeps a station that refuses the cookie for
+   * some other reason from turning this into a reconnect loop: having tried, it
+   * stops, and the console says so rather than silently retrying forever.
+   */
+  const signedIn = session.status === 'signed-in'
+  /**
+   * Which intent we last opened a fresh socket for, or null once the socket
+   * agrees with this browser about who it is.
+   *
+   * The guard, and it has to be this rather than a boolean, because the fix is
+   * needed in both directions: signing in leaves a socket that cannot offer
+   * anybody a voice, and signing out leaves one that still could. Recording
+   * *what* was attempted means each change of mind gets exactly one reconnect,
+   * and a station that disagrees for some third reason gets one and then a
+   * message rather than a loop.
+   */
+  const [attempted, setAttempted] = useState<boolean | null>(null)
+  useEffect(() => {
+    if (decks === null) return
+    if (decks === signedIn) {
+      setAttempted(null)
+      return
+    }
+    if (attempted === signedIn) return
+    setAttempted(signedIn)
+    setSocketEpoch((epoch) => epoch + 1)
+  }, [signedIn, decks, attempted])
+
+  /**
+   * Signed in, reconnected for it, and the station still does not see the decks.
+   *
+   * Worth saying out loud on the console, because what it breaks is invisible:
+   * the mic opens, the room ducks, the meter moves, and no listener can be
+   * offered a voice.
+   */
+  const deafConsole = signedIn && decks === false && attempted === true
+
   // Asked for by whichever end of a voice this page is, and it can be both.
   const iceServers = useIceServers(joined || admin)
   const voice = useVoiceReceiver({
@@ -564,6 +625,7 @@ function Station({ route: requested, session }: { route: Route; session: AdminSe
             applyMic={applyMic}
             connection={connection}
             me={me}
+            deaf={deafConsole}
             iceServers={iceServers}
             subscribe={subscribe}
           />
