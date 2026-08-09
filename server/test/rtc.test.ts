@@ -92,3 +92,45 @@ describe('GET /api/rtc', () => {
     expect(res.statusCode).toBe(200)
   })
 })
+
+describe('GET /api/rtc with Cloudflare behind it', () => {
+  const MINTED = {
+    iceServers: [
+      { urls: ['stun:stun.cloudflare.com:3478'] },
+      {
+        urls: ['turn:turn.cloudflare.com:3478?transport=udp'],
+        username: 'minted',
+        credential: 'and-expiring',
+      },
+    ],
+  }
+
+  it('hands a listener credentials the station never held', async () => {
+    // The whole reason Cloudflare needs its own path: there is no static
+    // password to put in a config file, only a key id and an API token to
+    // exchange for one that expires.
+    harness = await startHarness(
+      { stunUrls: [], cloudflareTurn: { keyId: 'k', apiToken: 't' } },
+      { turnFetch: async () => new Response(JSON.stringify(MINTED), { status: 201 }) },
+    )
+
+    const res = await harness.app.inject({ method: 'GET', url: '/api/rtc' })
+
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual({ iceServers: MINTED.iceServers })
+  })
+
+  it('still answers with what it does have when Cloudflare will not', async () => {
+    // A station that could not mint still works for every listener who did not
+    // need a relay, and a 500 here would take the voice from all of them.
+    harness = await startHarness(
+      { stunUrls: ['stun:mine:3478'], cloudflareTurn: { keyId: 'k', apiToken: 't' } },
+      { turnFetch: async () => new Response('nope', { status: 403 }) },
+    )
+
+    const res = await harness.app.inject({ method: 'GET', url: '/api/rtc' })
+
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual({ iceServers: [{ urls: ['stun:mine:3478'] }] })
+  })
+})

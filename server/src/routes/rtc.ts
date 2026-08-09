@@ -1,9 +1,12 @@
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify'
 import type { Config } from '../config.js'
 import { requireListener } from '../lib/auth.js'
+import type { CloudflareTurn } from '../turn.js'
 
 interface RtcDeps {
   config: Config
+  /** Cloudflare's relay, when one is configured. See `CloudflareTurn`. */
+  turn?: CloudflareTurn | null
 }
 
 /** What an `RTCPeerConnection` takes, in the shape it takes it. */
@@ -47,12 +50,14 @@ export function iceServers(config: Config): IceServer[] {
  * password. It is a few lines there and it means an answer to this that leaks
  * is worth nothing in an hour.
  */
-export function rtcRoutes({ config }: RtcDeps): FastifyPluginAsync {
+export function rtcRoutes({ config, turn = null }: RtcDeps): FastifyPluginAsync {
   return async function routes(app: FastifyInstance) {
-    app.get(
-      '/api/rtc',
-      { preHandler: requireListener(config) },
-      async () => ({ iceServers: iceServers(config) }),
-    )
+    app.get('/api/rtc', { preHandler: requireListener(config) }, async () => {
+      // Configured addresses first, then anything minted. Order is not a
+      // preference — a browser tries them all — but keeping the station's own
+      // settings ahead of a third party's reads better in a log.
+      const minted = turn ? await turn.servers() : []
+      return { iceServers: [...iceServers(config), ...minted] }
+    })
   }
 }

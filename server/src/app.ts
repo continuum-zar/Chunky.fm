@@ -30,6 +30,7 @@ import { queueRoutes } from './routes/queue.js'
 import { uploadRoutes } from './routes/upload.js'
 import { wishesRoutes } from './routes/wishes.js'
 import { Station } from './station.js'
+import { CloudflareTurn } from './turn.js'
 import { Schedule } from './schedule.js'
 import { scheduleRoutes } from './routes/schedule.js'
 import { WishBook } from './wishes.js'
@@ -92,6 +93,8 @@ export interface BuildAppOptions {
   signInRefillMs?: number
   /** The seam tests mock LRCLIB through; production reaches the real archive. */
   lyricsFetch?: typeof fetch
+  /** The same, for Cloudflare's relay. See `CloudflareTurn`. */
+  turnFetch?: typeof fetch
 }
 
 export async function buildApp({
@@ -118,6 +121,7 @@ export async function buildApp({
   signInBurst,
   signInRefillMs,
   lyricsFetch,
+  turnFetch,
 }: BuildAppOptions): Promise<FastifyInstance> {
   await ensureStorageDirs(config)
 
@@ -221,6 +225,21 @@ export async function buildApp({
 
   const lyrics = new LyricsService({ db, baseUrl: config.lrclibBaseUrl, fetchFn: lyricsFetch })
 
+  // Cloudflare hands out relay credentials rather than holding one, so they are
+  // minted here and shared: a room arriving together is thirty listeners asking
+  // `/api/rtc` inside a few seconds, and thirty calls to be told the same
+  // answer would be rude. Null unless configured, which is a station on STUN.
+  const turn = config.cloudflareTurn
+    ? new CloudflareTurn({
+        ...config.cloudflareTurn,
+        fetchFn: turnFetch,
+        // Logged rather than raised: a station that cannot reach Cloudflare
+        // still works for every listener who did not need a relay, and
+        // refusing the request would take the voice away from all of them.
+        onError: (err) => app.log.error({ err }, 'could not mint relay credentials'),
+      })
+    : null
+
   air.on('change', (snapshot) => {
     if (snapshot.live) return
     station.playback.stop()
@@ -258,7 +277,7 @@ export async function buildApp({
   await app.register(sessionRoutes({ config, air }))
   await app.register(scheduleRoutes({ config, schedule }))
   await app.register(micRoutes({ config, mic, air }))
-  await app.register(rtcRoutes({ config }))
+  await app.register(rtcRoutes({ config, turn }))
   await app.register(mutesRoutes({ config, mutes }))
   await app.register(paddingRoutes({ config, padding }))
   await app.register(listenRoutes({ config }))

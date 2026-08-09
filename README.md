@@ -868,6 +868,17 @@ TCP survives a network that drops UDP, and `turns:` on 443 gets through a
 firewall that only believes in HTTPS, and the strict networks are exactly where
 a relay was needed in the first place.
 
+Two ways to configure one. `TURN_URL` / `TURN_USERNAME` / `TURN_CREDENTIAL` is a
+relay you hold a password for, which is what coturn gives you. **Cloudflare
+gives you neither** — it hands out a key id and an API token, and the station
+exchanges those at `/api/rtc` for a username and credential that expire. That is
+the better shape, and it is why they need `TURN_KEY_ID` / `TURN_API_TOKEN`
+rather than the three above: a relay credential that leaks and lapses the same
+day is a much smaller thing to have lost. One set is minted and shared, so a
+room arriving together is one call to Cloudflare rather than thirty, and a
+station that cannot reach it keeps serving STUN rather than failing the request
+that both ends of every voice depend on.
+
 **A failed connection is rebuilt, twice, then given up on.** Not an ICE restart:
 there is no transport state worth preserving here, and a listener answering a
 fresh offer on a fresh connection is a path the code already takes every time

@@ -83,6 +83,8 @@ export interface HarnessOptions {
    * that answers.
    */
   lyricsFetch?: typeof fetch
+  /** Stands in for Cloudflare's relay; nothing here reaches the real one. */
+  turnFetch?: typeof fetch
   /** Bind a real port: required for anything that opens a websocket. */
   listen?: boolean
 }
@@ -109,6 +111,7 @@ export async function startHarness(
     micLeaseMs,
     micSweepIntervalMs,
     lyricsFetch = async () => new Response(null, { status: 404 }),
+    turnFetch = async () => new Response(null, { status: 404 }),
     listen = false,
   }: HarnessOptions = {},
 ): Promise<Harness> {
@@ -137,6 +140,7 @@ export async function startHarness(
     // their own through `overrides`.
     stunUrls: [],
     turn: null,
+    cloudflareTurn: null,
     // No client bundle: these tests are about the API. The doorway tests build
     // a bundle in a temp dir and pass it through `overrides`.
     clientDir: null,
@@ -170,6 +174,7 @@ export async function startHarness(
     micLeaseMs,
     micSweepIntervalMs,
     lyricsFetch,
+    turnFetch,
   })
 
   let wsUrl = ''

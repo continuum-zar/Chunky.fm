@@ -93,6 +93,17 @@ export interface Config {
    * phone, is most of them.
    */
   turn: { urls: string[]; username: string; credential: string } | null
+  /**
+   * Cloudflare's relay, which hands out credentials rather than holding one.
+   *
+   * A key id and an API token, exchanged at request time for a username and a
+   * credential that expire. That is why it cannot go in `turn` above: there is
+   * no static password to put there, and a relay credential that expires the
+   * same day is a much smaller thing to have leaked than one that does not.
+   *
+   * Set alongside `turn` if you like; a browser is happy to be given both.
+   */
+  cloudflareTurn: { keyId: string; apiToken: string } | null
   clientDir: string | null
   /**
    * Who is allowed to tell the station where a request really came from.
@@ -241,6 +252,17 @@ function turnFromEnv(env: NodeJS.ProcessEnv): Config['turn'] {
   return { urls, username, credential }
 }
 
+/** Both halves or neither, for the reason `turnFromEnv` wants all three. */
+function cloudflareTurnFromEnv(env: NodeJS.ProcessEnv): Config['cloudflareTurn'] {
+  const keyId = env.TURN_KEY_ID?.trim()
+  const apiToken = env.TURN_API_TOKEN?.trim()
+  if (!keyId && !apiToken) return null
+  if (!keyId || !apiToken) {
+    throw new Error('TURN_KEY_ID and TURN_API_TOKEN must be set together, or not at all')
+  }
+  return { keyId, apiToken }
+}
+
 function intFromEnv(value: string | undefined, fallback: number, name: string): number {
   if (value === undefined || value === '') return fallback
   const parsed = Number(value)
@@ -277,6 +299,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     logLevel: env.LOG_LEVEL?.trim() || 'info',
     stunUrls: listFromEnv(env.STUN_URLS, DEFAULT_STUN_URLS),
     turn: turnFromEnv(env),
+    cloudflareTurn: cloudflareTurnFromEnv(env),
     // Unset means "something else is serving the client", which is true of both
     // the compose stack and `npm run dev`. Only the single-image deployment
     // sets it. See the root Dockerfile.
