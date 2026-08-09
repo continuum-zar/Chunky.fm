@@ -69,6 +69,16 @@ export interface Config {
    * reached directly, which in practice means a LAN. That is a real way to run
    * this and it is not the default.
    */
+  /**
+   * How much the station says about itself, as a pino level.
+   *
+   * `info` everywhere by default. The one reason to move it is a voice that
+   * will not connect: at `debug` every ICE candidate the station relays is a
+   * line, which says whether addresses are crossing at all and in which
+   * direction they stop. That is far too much to keep on, and exactly what is
+   * wanted for the ten minutes somebody is looking.
+   */
+  logLevel: string
   stunUrls: string[]
   /** Null unless a relay is configured; see `stunUrls`. */
   turn: { url: string; username: string; credential: string } | null
@@ -250,6 +260,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     stationKey: stationKeyFromEnv(env),
     maxUploadBytes: intFromEnv(env.MAX_UPLOAD_BYTES, DEFAULT_MAX_UPLOAD_BYTES, 'MAX_UPLOAD_BYTES'),
     lrclibBaseUrl: env.LRCLIB_BASE_URL?.trim() || 'https://lrclib.net',
+    logLevel: env.LOG_LEVEL?.trim() || 'info',
     stunUrls: listFromEnv(env.STUN_URLS, DEFAULT_STUN_URLS),
     turn: turnFromEnv(env),
     // Unset means "something else is serving the client", which is true of both

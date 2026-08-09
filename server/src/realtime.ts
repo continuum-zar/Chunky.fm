@@ -32,6 +32,13 @@ import type { WishBook } from './wishes.js'
 export interface RealtimeLogger {
   info(obj: object, msg: string): void
   warn(obj: object, msg: string): void
+  /**
+   * Kept off by default in every deployment, which is the point: one ICE
+   * candidate per line is the right level of detail exactly once, when a
+   * connection will not establish and somebody is reading the log to find out
+   * why. See `signal`.
+   */
+  debug(obj: object, msg: string): void
 }
 
 export interface RealtimeOptions {
@@ -180,6 +187,20 @@ const DEFAULT_SIGNAL_REFILL_MS = 500
 
 function send(socket: WebSocket, message: ServerMessage): void {
   if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message))
+}
+
+/**
+ * What a signalling payload calls itself, for the log and nothing else.
+ *
+ * A peek, not a parse. The station has no opinion about SDP and this does not
+ * give it one: it reads a single string field if there is one and says
+ * `unknown` otherwise, so a client that changes shape gets logged rather than
+ * refused.
+ */
+function kindOf(payload: unknown): string {
+  if (typeof payload !== 'object' || payload === null) return 'unknown'
+  const kind = (payload as { kind?: unknown }).kind
+  return typeof kind === 'string' ? kind : 'unknown'
 }
 
 /** What a station with no `air` of its own reports: always broadcasting. */
@@ -442,6 +463,14 @@ export function attachRealtime({
       // Refused rather than dropped: a client that has this wrong is waiting on
       // an answer that is never coming, and silence is the one response it
       // cannot tell from a slow network.
+      //
+      // Logged at `warn`, because this is what a console that signed in after
+      // it connected looks like from the server: a stream of them, and a room
+      // that ducks for a voice nobody can hear. See `YouMessage.decks`.
+      log?.warn(
+        { from: senderId, to, decks: [...deckSockets] },
+        'refusing signalling: the sender is not the decks',
+      )
       send(socket, errorMessage('not_the_decks', 'listeners may only signal the decks', 'signal'))
       return
     }
@@ -459,9 +488,18 @@ export function attachRealtime({
     if (!peer) {
       // Ordinary rather than exceptional: a listener who closed the tab between
       // the roster going out and the offer being written.
+      log?.info({ from: senderId, to }, 'signalling for a socket that has gone')
       send(socket, errorMessage('no_such_peer', 'nobody is listening on that id', 'signal'))
       return
     }
+    // Offers and answers at `info`, candidates at `debug`. A negotiation is two
+    // descriptions and a dozen or two addresses, so logging every one of them
+    // at the level a deployment actually keeps would drown the rest of the
+    // evening — while the two that say whether a negotiation *started* are
+    // exactly what somebody reading a production log needs.
+    const kind = kindOf(payload)
+    if (kind === 'ice') log?.debug({ from: senderId, to }, 'relaying an address')
+    else log?.info({ from: senderId, to, kind }, 'relaying signalling')
     send(peer, signalMessage(senderId, payload))
   }
 

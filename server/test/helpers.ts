@@ -129,6 +129,9 @@ export async function startHarness(
     maxUploadBytes: 10 * 1024 * 1024,
     // Never resolved: the harness stubs the fetch itself. See `lyricsFetch`.
     lrclibBaseUrl: 'http://lrclib.invalid',
+    // Never read: the harness passes `logger: false`. Present so the shape is
+    // the shape production has.
+    logLevel: 'silent',
     // No STUN and no relay, so nothing here reaches the internet to find out
     // how two browsers would meet. The tests that are about `/api/rtc` pass
     // their own through `overrides`.

@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   VOICE_BITRATE,
+  type VoiceReport,
+  diagnose,
   isSignalPayload,
   offerVoice,
   receiveVoice,
@@ -262,5 +264,55 @@ describe('closing a link', () => {
     expect(pc.onicecandidate).toBeNull()
     expect(pc.onconnectionstatechange).toBeNull()
     expect(pc.ontrack).toBeNull()
+  })
+})
+
+/**
+ * Turning the numbers into somewhere to look.
+ *
+ * When a voice will not connect there are four or five reasons it could be,
+ * they need completely different fixes, and every one of them looks identical
+ * from the console: a listener who never gets past "connecting". These are the
+ * counts that tell them apart, so what matters is that the *first* sentence
+ * offered is the one worth acting on.
+ */
+describe('diagnose', () => {
+  const report = (over: Partial<VoiceReport> = {}): VoiceReport => ({
+    label: 'peer',
+    state: 'failed',
+    iceServers: 1,
+    gathered: { host: 2, srflx: 1 },
+    received: { host: 2, srflx: 1 },
+    selected: null,
+    ...over,
+  })
+
+  it('names a signalling problem before anything about the network', () => {
+    // Nothing arriving from the far end is not a NAT problem and no amount of
+    // TURN will touch it: the addresses are not getting back here at all.
+    expect(diagnose(report({ received: {} }))).toMatch(/signalling/)
+  })
+
+  it('names an unconfigured station before blaming a network', () => {
+    expect(diagnose(report({ iceServers: 0, received: { host: 1 } }))).toMatch(/no STUN or TURN/)
+  })
+
+  it('says which end STUN failed at', () => {
+    expect(diagnose(report({ gathered: { host: 2 } }))).toMatch(/here/)
+    expect(diagnose(report({ received: { host: 2 } }))).toMatch(/far end/)
+  })
+
+  it('asks for a relay only once both ends know their public address', () => {
+    // The one that costs money to fix, so it is not offered until everything
+    // cheaper has been ruled out.
+    expect(diagnose(report())).toMatch(/needs TURN/)
+  })
+
+  it('has something to say when a relay was there and it still failed', () => {
+    const withRelay = report({
+      gathered: { host: 1, srflx: 1, relay: 1 },
+      received: { host: 1, srflx: 1, relay: 1 },
+    })
+    expect(diagnose(withRelay)).toMatch(/relay was available/)
   })
 })

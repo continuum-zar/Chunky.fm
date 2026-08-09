@@ -125,7 +125,10 @@ export async function buildApp({
   // front. See Config.trustProxy. The sign-in throttle is keyed on it, and one
   // bucket shared by everyone behind the proxy would be a lockout, not a limit.
   const app = Fastify({
-    logger: logger ?? true,
+    // `LOG_LEVEL=debug` is what makes the station print every ICE candidate it
+    // relays, which is the one view that says whether two browsers are
+    // exchanging addresses at all. See `Config.logLevel`.
+    logger: logger ?? { level: config.logLevel },
     bodyLimit: 1024 * 1024,
     trustProxy: config.trustProxy,
   })

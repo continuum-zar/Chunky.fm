@@ -51,6 +51,95 @@ export interface PeerLinkOptions {
   send(payload: SignalPayload): void
   /** Whether this link is connecting, connected, or has given up. */
   onState?(state: RTCPeerConnectionState): void
+  /** Who this connection is with, for the log line when it settles. */
+  label?: string
+}
+
+/**
+ * What kind of address a candidate is, out of the SDP line it arrives as.
+ *
+ * The three that matter read straight off it. `host` is this machine's own
+ * address, which only works between two browsers that can already reach each
+ * other — the same network, or the same laptop. `srflx` is what the outside
+ * world sees, discovered by asking a STUN server, and is what carries most
+ * connections across the internet. `relay` is a TURN server carrying the audio
+ * because nothing direct exists.
+ *
+ * Counting them is the whole diagnosis when a connection will not establish.
+ * Only `host` on both sides means STUN never answered, and no amount of waiting
+ * will help. `srflx` on both sides and still failing means a NAT nothing
+ * direct crosses, which is what TURN is for and nothing else fixes.
+ */
+function candidateType(candidate: string): string {
+  return / typ (\w+)/.exec(candidate)?.[1] ?? 'unknown'
+}
+
+/** How each side's addresses turned out, which is what a failure is diagnosed from. */
+export interface VoiceReport {
+  label: string
+  state: RTCPeerConnectionState
+  /** How many ICE servers this connection was given. Zero is host-only. */
+  iceServers: number
+  /** Local candidate types, counted: `{host: 2, srflx: 1}`. */
+  gathered: Record<string, number>
+  /** And the far end's, as they arrived. */
+  received: Record<string, number>
+  /** The pair actually carrying audio, if any got that far. */
+  selected: string | null
+}
+
+/**
+ * Says how a connection turned out, once it has.
+ *
+ * On the console this is the answer to "why can nobody hear me", and it is
+ * printed rather than shown because the shape of the answer changes with the
+ * problem: a reader needs the numbers, not a sentence somebody guessed at.
+ */
+function report(report: VoiceReport): void {
+  const line = `[voice] ${report.label}: ${report.state}`
+  const detail = {
+    iceServers: report.iceServers,
+    gathered: report.gathered,
+    received: report.received,
+    selected: report.selected,
+  }
+  if (report.state === 'failed') {
+    console.warn(
+      `${line} — ${diagnose(report)}`,
+      detail,
+    )
+    return
+  }
+  console.info(line, detail)
+}
+
+/**
+ * The most likely reason, in a sentence, from the numbers above.
+ *
+ * Ordered from the failure that explains the most to the one that explains the
+ * least, because several of these can be true at once and only the first one
+ * is worth acting on. Exported because it decides where somebody looks next,
+ * and getting that wrong costs an afternoon in the wrong place.
+ */
+export function diagnose({ iceServers, gathered, received }: VoiceReport): string {
+  const mine = Object.keys(gathered)
+  const theirs = Object.keys(received)
+  if (theirs.length === 0) {
+    return 'the far end sent no addresses at all: signalling is not getting back here'
+  }
+  if (iceServers === 0) {
+    return 'no STUN or TURN was configured, so only same-network connections can work'
+  }
+  if (!mine.includes('srflx') && !mine.includes('relay')) {
+    return 'STUN never answered here, so this browser only knows its own local address'
+  }
+  if (!theirs.includes('srflx') && !theirs.includes('relay')) {
+    return 'STUN never answered at the far end, so it only knows its own local address'
+  }
+  if (!mine.includes('relay') && !theirs.includes('relay')) {
+    return 'both ends know their public address and still cannot meet: this needs TURN'
+  }
+  return 'a relay was available and the connection still failed'
 }
 
 export interface PeerLink {
@@ -60,21 +149,66 @@ export interface PeerLink {
   close(): void
 }
 
-function link(pc: RTCPeerConnection, { send, onState }: PeerLinkOptions): PeerLink {
+function link(pc: RTCPeerConnection, { send, onState, iceServers, label = 'peer' }: PeerLinkOptions): PeerLink {
+  const gathered: Record<string, number> = {}
+  const received: Record<string, number> = {}
+  let settled = false
+
+  /** The pair actually carrying audio, when the browser will say. */
+  async function selectedPair(): Promise<string | null> {
+    try {
+      const stats = await pc.getStats?.()
+      if (!stats) return null
+      let pair: string | null = null
+      stats.forEach((entry: { type?: string; state?: string; nominated?: boolean; localCandidateId?: string }) => {
+        if (entry.type === 'candidate-pair' && entry.state === 'succeeded') {
+          pair = entry.nominated ? 'nominated' : 'succeeded'
+        }
+      })
+      return pair
+    } catch {
+      return null
+    }
+  }
+
+  async function settle(state: RTCPeerConnectionState): Promise<void> {
+    if (settled) return
+    settled = true
+    report({
+      label,
+      state,
+      iceServers: iceServers.length,
+      gathered,
+      received,
+      selected: await selectedPair(),
+    })
+  }
+
   // Trickle: candidates go as they are found rather than being gathered into
   // the offer. Two reasons, and the second is the one that bites — it is
   // dramatically faster to connect, and a description with every candidate
   // folded in is several kilobytes, which is what makes an SDP frame big
   // enough to be worth thinking about at all.
   pc.onicecandidate = (event) => {
-    if (event.candidate) send({ kind: 'ice', candidate: event.candidate.toJSON() })
+    if (!event.candidate) return
+    const type = event.candidate.type ?? candidateType(event.candidate.candidate)
+    gathered[type] = (gathered[type] ?? 0) + 1
+    send({ kind: 'ice', candidate: event.candidate.toJSON() })
   }
-  pc.onconnectionstatechange = () => onState?.(pc.connectionState)
+  pc.onconnectionstatechange = () => {
+    const state = pc.connectionState
+    onState?.(state)
+    // Once, when it is decided. `connected` and `failed` are both worth a line:
+    // the working case is what the failing one has to be read against.
+    if (state === 'connected' || state === 'failed') void settle(state)
+  }
 
   return {
     connection: pc,
     async accept(payload) {
       if (payload.kind === 'ice') {
+        const type = candidateType(payload.candidate.candidate ?? '')
+        received[type] = (received[type] ?? 0) + 1
         try {
           await pc.addIceCandidate(payload.candidate)
         } catch {

@@ -25,15 +25,35 @@ export function useIceServers(enabled: boolean): RTCIceServer[] | null {
     void (async () => {
       try {
         const response = await fetch('/api/rtc', { credentials: 'same-origin' })
-        if (!response.ok) throw new Error(String(response.status))
+        if (!response.ok) throw new Error(`/api/rtc answered ${response.status}`)
         const body = (await response.json()) as { iceServers?: RTCIceServer[] }
-        if (!cancelled) setServers(body.iceServers ?? [])
-      } catch {
+        const found = body.iceServers ?? []
+        if (cancelled) return
+        setServers(found)
+        // Said out loud, because an empty list here is the difference between a
+        // station that works across the internet and one that works on a LAN,
+        // and nothing else on either screen would ever mention it.
+        if (found.length === 0) {
+          console.warn('[voice] the station offered no STUN or TURN: same-network connections only')
+        } else {
+          console.info(
+            '[voice] ice servers',
+            found.map((server) => ({
+              urls: server.urls,
+              // Never the credential itself. Whether one exists is the whole
+              // question; what it is, is not this log's business.
+              relay: Boolean(server.username),
+            })),
+          )
+        }
+      } catch (err) {
         // An empty list is not nothing: it is host candidates only, which is a
         // station that works for everyone on the same network and nobody else.
         // Better than refusing to try, and the honest fallback for a request
         // that failed rather than a station that was configured this way.
-        if (!cancelled) setServers([])
+        if (cancelled) return
+        console.warn('[voice] could not ask the station how to reach anybody:', err)
+        setServers([])
       }
     })()
     return () => {
@@ -201,6 +221,7 @@ export function useVoiceBroadcast({
         id,
         offerVoice(track, {
           iceServers,
+          label: `to listener ${id}`,
           send: (payload) => connection.send({ type: 'signal', to: id, payload }),
           onState: (state) => {
             note(id, state)
@@ -334,6 +355,7 @@ export function useVoiceReceiver({
         link.current?.close()
         link.current = receiveVoice({
           iceServers: servers,
+          label: `from the decks (${message.from})`,
           send: (payload) => socket.send({ type: 'signal', to: message.from, payload }),
           onStream: (stream) => play(stream),
           onState: (state) => {

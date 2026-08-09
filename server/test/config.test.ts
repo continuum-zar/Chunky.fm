@@ -175,3 +175,16 @@ describe('finding another browser', () => {
     expect(() => loadConfig({ TURN_USERNAME: 'sam', TURN_CREDENTIAL: 'pw' })).toThrow(/together/)
   })
 })
+
+describe('how much the station says', () => {
+  it('keeps to itself by default', () => {
+    expect(loadConfig({}).logLevel).toBe('info')
+  })
+
+  it('can be turned up, which is how an unconnectable voice is read', () => {
+    // At `debug` every relayed ICE candidate is a line: far too much to keep
+    // on, and exactly what is wanted for the ten minutes somebody is trying to
+    // find out why two browsers will not meet.
+    expect(loadConfig({ LOG_LEVEL: 'debug' }).logLevel).toBe('debug')
+  })
+})
