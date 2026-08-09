@@ -71,6 +71,12 @@ export interface PeerLinkOptions {
  * direct crosses, which is what TURN is for and nothing else fixes.
  */
 function candidateType(candidate: string): string {
+  // Firefox marks the end of gathering with a candidate whose string is empty,
+  // rather than with the null every other implementation uses. It is a real
+  // thing to forward — the far end reads it as "that is all of them" — but it
+  // is not an address, and counting it as one put an `unknown` in the middle of
+  // the numbers a failure is read from.
+  if (candidate.trim() === '') return 'end-of-candidates'
   return / typ (\w+)/.exec(candidate)?.[1] ?? 'unknown'
 }
 
@@ -191,7 +197,11 @@ function link(pc: RTCPeerConnection, { send, onState, iceServers, label = 'peer'
   // enough to be worth thinking about at all.
   pc.onicecandidate = (event) => {
     if (!event.candidate) return
-    const type = event.candidate.type ?? candidateType(event.candidate.candidate)
+    // The string first: `type` is null on the end-of-gathering marker, and
+    // reading it from the line is what tells that apart from a real address.
+    const type = candidateType(event.candidate.candidate) === 'end-of-candidates'
+      ? 'end-of-candidates'
+      : (event.candidate.type ?? candidateType(event.candidate.candidate))
     gathered[type] = (gathered[type] ?? 0) + 1
     send({ kind: 'ice', candidate: event.candidate.toJSON() })
   }

@@ -91,10 +91,23 @@ class FakePeerConnection {
     this.closed = true
   }
 
-  /** Drive what a real implementation would raise on its own. */
+  /**
+   * Drive what a real implementation would raise on its own.
+   *
+   * The `candidate` string is carried as well as the JSON, because that is
+   * where the address type is read from — and Firefox's end-of-gathering marker
+   * is an empty one, which is the case worth being able to reproduce.
+   */
   emitCandidate(candidate: RTCIceCandidateInit | null): void {
     this.onicecandidate?.({
-      candidate: candidate === null ? null : ({ toJSON: () => candidate } as RTCIceCandidate),
+      candidate:
+        candidate === null
+          ? null
+          : ({
+              candidate: candidate.candidate ?? '',
+              type: / typ (\w+)/.exec(candidate.candidate ?? '')?.[1] ?? null,
+              toJSON: () => candidate,
+            } as unknown as RTCIceCandidate),
     })
   }
 
@@ -314,5 +327,50 @@ describe('diagnose', () => {
       received: { host: 1, srflx: 1, relay: 1 },
     })
     expect(diagnose(withRelay)).toMatch(/relay was available/)
+  })
+})
+
+describe('counting addresses', () => {
+  /** The counts a failure is read from, out of a finished link. */
+  async function countsFor(candidates: string[]): Promise<Record<string, number>> {
+    const seen: Record<string, number> = {}
+    const link = receiveVoice({
+      iceServers: [],
+      send: () => undefined,
+      onStream: () => undefined,
+    })
+    for (const candidate of candidates) {
+      await link.accept({ kind: 'ice', candidate: { candidate } })
+    }
+    // Read back through what the connection was actually handed, which is the
+    // only externally visible record of what was counted.
+    for (const given of FakePeerConnection.built[0]!.candidates) {
+      const type = / typ (\w+)/.exec(given.candidate ?? '')?.[1] ?? (given.candidate ? 'unknown' : 'end')
+      seen[type] = (seen[type] ?? 0) + 1
+    }
+    return seen
+  }
+
+  it('tells the three kinds of address apart', async () => {
+    // The whole diagnosis rests on this. `host` is a machine's own address and
+    // only works between browsers that can already reach each other; `srflx` is
+    // what the outside world sees; `relay` is a TURN server carrying the audio.
+    expect(
+      await countsFor([
+        'candidate:1 1 udp 1 192.168.1.5 5000 typ host',
+        'candidate:2 1 udp 1 203.0.113.9 5000 typ srflx',
+        'candidate:3 1 udp 1 198.51.100.4 5000 typ relay',
+      ]),
+    ).toEqual({ host: 1, srflx: 1, relay: 1 })
+  })
+
+  it('forwards the end-of-gathering marker without calling it an address', async () => {
+    // Firefox signals the end with an empty candidate string rather than the
+    // null everything else uses. It is worth forwarding — the far end reads it
+    // as "that is all of them" — and counting it as an address put an
+    // `unknown` in the middle of the numbers somebody reads a failure from.
+    const link = receiveVoice({ iceServers: [], send: () => undefined, onStream: () => undefined })
+    await link.accept({ kind: 'ice', candidate: { candidate: '' } })
+    expect(FakePeerConnection.built[0]!.candidates).toEqual([{ candidate: '' }])
   })
 })
