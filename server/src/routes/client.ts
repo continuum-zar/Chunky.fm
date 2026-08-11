@@ -29,6 +29,33 @@ export interface ClientBundle {
   index: Buffer
   /** The page in front of it. Vite's `landing.html` entry. */
   landing: Buffer
+  /**
+   * The handful of files that have to answer on their own name.
+   *
+   * Everything else the client ships is under `/assets/` with a hash in it,
+   * which is what makes it cacheable forever. These cannot be: the address of
+   * a card is written into the document as an absolute URL, and something
+   * fetching it is a machine on the other side of the internet that has no
+   * idea what a content hash is. So they sit at the root, unhashed, and this is
+   * what stops them being answered with the app shell — which is what an
+   * unknown path gets, and which would have made the preview image a page of
+   * HTML that every unfurler quietly gave up on.
+   */
+  root: Map<string, { body: Buffer; type: string }>
+}
+
+/**
+ * What is served from the root, and what each one is.
+ *
+ * A list rather than a directory read, because the alternative is serving
+ * whatever happens to be in the build output at the top level — and the build
+ * output's top level also contains the two documents, which are already served
+ * by the doorway with rules of their own about caching and redirects.
+ */
+const ROOT_FILES: Record<string, string> = {
+  'og.png': 'image/png',
+  'apple-touch-icon.png': 'image/png',
+  'favicon.svg': 'image/svg+xml',
 }
 
 export async function loadClientBundle(clientDir: string): Promise<ClientBundle> {
@@ -43,7 +70,23 @@ export async function loadClientBundle(clientDir: string): Promise<ClientBundle>
     }
   }
   const [index, landing] = await Promise.all([read('index.html'), read('landing.html')])
-  return { index, landing }
+
+  // Optional, unlike the documents above, and deliberately: a station with no
+  // favicon is a station with no favicon, and refusing to boot over one would
+  // take a broadcast off the air for a picture. A missing document is a build
+  // that shipped without its client, which is a different kind of wrong.
+  const root = new Map<string, { body: Buffer; type: string }>()
+  await Promise.all(
+    Object.entries(ROOT_FILES).map(async ([name, type]) => {
+      try {
+        root.set(name, { body: await fs.readFile(path.join(clientDir, name)), type })
+      } catch {
+        // Not built, or not built yet. `npm run assets:og` makes them.
+      }
+    }),
+  )
+
+  return { index, landing, root }
 }
 
 /**
@@ -91,6 +134,8 @@ export function doorwayHook(bundle: ClientBundle) {
 
 interface ClientDeps {
   config: Config
+  /** The documents and the root files, already read. See `loadClientBundle`. */
+  bundle: ClientBundle
 }
 
 /**
@@ -108,7 +153,7 @@ interface ClientDeps {
  * the key in its own address bar, and a gate in front of it would refuse every
  * invite before it could be presented.
  */
-export function clientRoutes({ config }: ClientDeps): FastifyPluginAsync {
+export function clientRoutes({ config, bundle }: ClientDeps): FastifyPluginAsync {
   const clientDir = config.clientDir
   if (clientDir === null) {
     throw new Error('clientRoutes registered without a clientDir')
@@ -127,5 +172,14 @@ export function clientRoutes({ config }: ClientDeps): FastifyPluginAsync {
       index: false,
       dotfiles: 'deny',
     })
+
+    // A day. These are unhashed, so a change has to be able to reach a cache
+    // eventually; and the things that fetch a card cache it for far longer than
+    // this anyway, so a shorter number would buy nothing and cost requests.
+    for (const [name, file] of bundle.root) {
+      app.get(`/${name}`, async (_request, reply) =>
+        reply.type(file.type).header('cache-control', 'public, max-age=86400').send(file.body),
+      )
+    }
   }
 }

@@ -256,7 +256,7 @@ interpret.
 
 ## What is built
 
-**F1 and F3 are done.** The landing page serves **5.2 kB** of the station's own
+**F1, F2 and F3 are done.** The landing page serves **5.2 kB** of the station's own
 argument where it served 1.3 kB of shell, and the three crawl files are files
 rather than the app shell wearing a 200.
 
@@ -277,6 +277,44 @@ that costs nothing and needs no configuration; written into a file, it is a
 wrong hostname sitting in the repository waiting to be noticed. All three front
 doors were taught about them, because `lib/doorway.ts` exists to stop exactly
 that kind of drift.
+
+**F2: the card is drawn, not screenshotted.** `scripts/og-card.py` renders
+`og.png` at 1200×630 from the station's own values — the wordmark, one sentence,
+and the on-air lamp. Three things that survive being made small, which is the
+constraint: an unfurl renders around five hundred pixels wide and smaller on a
+phone, and a screenshot of a dark player at that size is a grey smudge. It is an
+asset script alongside `assets:albums` and `assets:countries`, so the card is
+regenerable rather than a binary somebody once made.
+
+**The origin is spelled once**, in `vite.config.ts`, and substituted into both
+documents at build time. A canonical link and a card image both have to be
+absolute — the thing fetching a card has no idea what page it came from — so the
+address ends up in the markup whether anybody likes it or not, and the choice is
+between one place and five. It is the Railway subdomain today; `PUBLIC_ORIGIN`
+in the build, or that one line, is the whole of the change when a domain lands.
+
+**The station gets the same card as the landing page**, deliberately. An invite
+is `/?k=<key>`, which redirects to `/listen`, so that is the address somebody
+ends up with in their history and the one they paste to a friend. Two previews
+for one station would be two stations. Its canonical still points at `/`, which
+is the page that describes the station and is true every day of the week.
+
+**And the root files are served rather than swallowed.** `og.png`,
+`favicon.svg` and `apple-touch-icon.png` cannot live under `/assets/` with a
+hash in the name, because their addresses are written into the documents as
+absolute URLs. Unhashed at the root, they were being answered with the app
+shell — a preview image that is a page of HTML, which every unfurler gives up on
+without saying anything. They are read at boot with the documents now, and
+optional: a station with no favicon is a station with no favicon, and refusing
+to boot over a picture would take a broadcast off the air.
+
+The one part of F2 that is **not** built is the good idea: **using the session
+poster as the card when a session is announced**, so a link says *this is
+happening on Saturday* rather than *this exists*. It needs the served document
+to vary with `/api/schedule`, which means templating HTML at request time in a
+place that currently sends a buffer — and doing it in only one of the three
+front doors would be exactly the drift `doorway.ts` exists to prevent. Worth
+doing, and worth doing on its own.
 
 One thing from F3 was **considered and deliberately left**: making an unknown
 path answer 404 rather than 200. The argument for it is soft 404s at unlimited

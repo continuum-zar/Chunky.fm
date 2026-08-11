@@ -16,6 +16,38 @@
     />
     <!-- Same two vendored faces as the station, from the app's own origin. -->
 
+    <!-- The card a link turns into, and the tab it opens in.
+
+         This station spreads person to person — somebody says "you should be on
+         this at nine" and sends the address — so the preview is the first
+         impression far more often than a search result will ever be. It was a
+         grey rectangle with a hostname in it.
+
+         `%ORIGIN%` is substituted at build time from one line in vite.config.ts;
+         see the note there about why these have to be absolute and why Vite's
+         own env replacement is not what does it.
+
+         The image is drawn rather than screenshotted: see scripts/og-card.py,
+         which explains why a screenshot of the station is the wrong thing at
+         card size. -->
+    <link rel="canonical" href="%ORIGIN%/" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="chunky.fm" />
+    <meta property="og:url" content="%ORIGIN%/" />
+    <meta property="og:title" content="chunky.fm · everyone hears the same second" />
+    <meta
+      property="og:description"
+      content="A live radio station where everyone hears the same second of the same song, chosen by one person on the decks. No skips, no shuffle, no algorithm. One room, listening together."
+    />
+    <meta property="og:image" content="%ORIGIN%/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="chunky.fm — everyone hears the same second of the same song." />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="theme-color" content="#0a0a0a" />
+
     <!-- The prelude below is styled here rather than in landing.css because it
          has to hold up on its own: it is what a reader sees before the bundle
          arrives, and what everything that does not run JavaScript sees instead

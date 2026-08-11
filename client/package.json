@@ -12,6 +12,8 @@
     "assets:albums": "node scripts/albums.mjs",
     "//assets:countries": "The country outlines the globe draws. Natural Earth 110m with every property stripped and coordinates cut to three decimals and, less obviously, with degenerate rings removed: three-globe runs each one through h3-js, which throws E_FAILED on a zero-length edge and drops the countries after it.",
     "assets:countries": "node scripts/countries.mjs",
+    "//assets:og": "The card a link turns into in a chat, and the icon in the tab. Drawn rather than screenshotted: a screenshot of the station is a dark player, and an unfurl renders around five hundred pixels wide. Needs Pillow; writes public/og.png and public/apple-touch-icon.png.",
+    "assets:og": "python3 scripts/og-card.py",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

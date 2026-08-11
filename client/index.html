@@ -4,6 +4,37 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>chunky.fm</title>
+    <meta
+      name="description"
+      content="A live radio station where everyone hears the same second of the same song, chosen by one person on the decks. No skips, no shuffle, no algorithm. One room, listening together."
+    />
+
+    <!-- The same card as the landing page, and deliberately the same: an invite
+         is `/?k=<key>`, which redirects here, so this is the address somebody
+         ends up with in their history and the one they paste to a friend. Two
+         different previews for one station would be two stations.
+
+         `canonical` points at `/` rather than at this page. This is the app —
+         there is nothing in this document but a mount point, and robots.txt
+         disallows it — and `/` is the page that describes the station and is
+         true on every day of the week. See routes/crawl.ts. -->
+    <link rel="canonical" href="%ORIGIN%/" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="chunky.fm" />
+    <meta property="og:url" content="%ORIGIN%/" />
+    <meta property="og:title" content="chunky.fm · everyone hears the same second" />
+    <meta
+      property="og:description"
+      content="A live radio station where everyone hears the same second of the same song, chosen by one person on the decks. No skips, no shuffle, no algorithm. One room, listening together."
+    />
+    <meta property="og:image" content="%ORIGIN%/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="chunky.fm — everyone hears the same second of the same song." />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="theme-color" content="#0a0a0a" />
     <!-- The two faces the design is drawn in are vendored into the bundle. See
          src/assets/fonts. Nothing here is fetched from another origin, which is
          what lets the container serve the design with no outbound network at

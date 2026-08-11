@@ -348,7 +348,7 @@ export async function buildApp({
   await app.register(wishesRoutes({ config, wishes }))
   // Last of the routes, so nothing it registers can shadow an API path.
   if (clientBundle !== null) {
-    await app.register(clientRoutes({ config }))
+    await app.register(clientRoutes({ config, bundle: clientBundle }))
   }
 
   const realtime = attachRealtime({

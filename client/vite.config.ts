@@ -4,6 +4,42 @@ import { type Connect, type Plugin, defineConfig } from 'vite'
 const SERVER = process.env.CHUNKY_SERVER ?? 'http://localhost:3000'
 
 /**
+ * Where this station answers, written out in full.
+ *
+ * The one place it is spelled. A canonical link and an Open Graph image both
+ * have to be absolute — a card is fetched by a machine that has no idea what
+ * page it came from — so the address ends up in the documents whether anybody
+ * likes it or not, and the choice is between it being in one place or five.
+ *
+ * A Railway subdomain today. When there is a real domain, this line is the
+ * change, or `PUBLIC_ORIGIN` is set in the build and this is never touched.
+ * No trailing slash: everything below appends its own path.
+ */
+const ORIGIN = (process.env.PUBLIC_ORIGIN ?? 'https://chunkyfm-production.up.railway.app').replace(
+  /\/+$/,
+  '',
+)
+
+/**
+ * Substitutes `%ORIGIN%` in both documents.
+ *
+ * Vite has its own `%VITE_*%` replacement for HTML, and it is deliberately not
+ * used: it reads from a `.env` file that would have to exist, and a build
+ * without one leaves the placeholder in the markup — a canonical link pointing
+ * at the literal string `%VITE_ORIGIN%`, which is worse than having none at
+ * all and would not fail anything on the way out.
+ */
+function origin(): Plugin {
+  return {
+    name: 'chunky-origin',
+    transformIndexHtml: {
+      order: 'pre',
+      handler: (html) => html.replaceAll('%ORIGIN%', ORIGIN),
+    },
+  }
+}
+
+/**
  * The doorway, in development and in `vite preview`.
  *
  * nginx decides what `/` is in the container (see nginx.conf) and the two
@@ -64,7 +100,7 @@ function doorway(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [react(), doorway()],
+  plugins: [origin(), react(), doorway()],
   build: {
     // Two documents, not one app with two routes: the landing page has to be
     // able to describe the station on the days the station's own bundle would

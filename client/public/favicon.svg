@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="chunky.fm">
+  <!--
+    The tab icon: the wordmark's initial, and the on-air lamp under it.
+
+    Drawn rather than exported so it costs a few hundred bytes and stays sharp
+    at every size a browser asks for. The two colours are the station's own —
+    #0a0a0a is the page and #fb2c36 is the LIVE badge — so a pinned tab reads as
+    the same object as the deck it opens.
+
+    No dark-mode variant. The background is painted rather than transparent,
+    because a glyph that inverted with the browser's theme would be a different
+    mark on two machines, and a favicon is only useful for being the same one.
+  -->
+  <rect width="32" height="32" rx="7" fill="#0a0a0a" />
+  <text
+    x="16"
+    y="20.5"
+    text-anchor="middle"
+    font-family="'Space Grotesk', ui-sans-serif, system-ui, sans-serif"
+    font-size="19"
+    font-weight="700"
+    fill="#ffffff"
+  >c</text>
+  <circle cx="16" cy="26" r="2.4" fill="#fb2c36" />
+</svg>
