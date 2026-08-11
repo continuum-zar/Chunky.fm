@@ -337,7 +337,44 @@ screen — with sipho unable to make a sound. Roughly 400 lines.
 
 ---
 
-## C2 — extract the mixer
+## C2 — extract the mixer — **built**
+
+Shipped, and it did not turn out to be "no new behaviour" — the sketch was
+wrong about that in a way worth recording.
+
+**There are two doors into the mixer, not one.** Extracting the buses was the
+easy half; the half that was missed is that something has to *build* them. The
+only route into `ensure` was opening the microphone, so a console that brought
+somebody up without ever granting a microphone still had no bus, and therefore
+still had no peer connections — exactly the thing this milestone exists to fix,
+failing silently. Bringing a guest up now builds the mixer too, and it has to
+happen on that click rather than when the guest accepts: an audio context starts
+suspended and only a user gesture may resume one, and the guest's acceptance is
+not a gesture on this machine.
+
+That was found in a browser rather than by a test, and it is worth knowing how,
+because the first check written for it passed while the feature was broken. The
+console renders its reach list whenever it has *something to send*, and the list
+shows every listener as `connecting` until a peer connection says otherwise — so
+a console with no bus at all draws a full list of people connecting, which is
+indistinguishable at a glance from a working mesh. The assertion that caught it
+is the summary line: **2 of 2 hearing you**, with no microphone open.
+
+Two smaller things:
+
+- **`MicInput.track` became `MicInput.live`.** The track belongs to the mixer now
+  and outlives any one microphone, so what the console needs from the rig is not
+  "what do I send" but "is there anything of mine on the bus". `sending` is that
+  or a guest, and it is what takes the mesh up and down.
+- **The rig no longer closes the context.** It stops its capture and disconnects
+  its three nodes; the buses and the context belong to the mixer. Without that
+  split, changing input device — which tears the rig down and rebuilds it —
+  would have taken every connection in the room with it.
+
+**Verified:** 14 new tests on the graph, including the one this whole feature
+turns on — the room bus carries the guest and the guest bus does not — and
+`qa:voice` passing unchanged in two real browsers, which is the claim the
+milestone actually makes.
 
 No new behaviour whatsoever. This is the milestone that makes C4 and C5 small,
 and it is the easiest one to verify because everything must keep working exactly
@@ -412,11 +449,16 @@ Today's rule is the cheaper one; keep it and just widen it by a guest.
 
 ### Tests
 
-`client/test/mixer.test.ts` against the existing fake `AudioContext`: the room
-track exists before any source is connected; connecting `talkIn` reaches both
-buses; closing disconnects everything. Plus the existing `mic-input.test.ts` and
-`audio-graph.test.ts` continuing to pass untouched, which is the real assertion
-of this milestone.
+`client/test/mixer.test.ts`, 14 tests against a fake `AudioContext` that records
+what was wired to what: the buses existing before any source is connected;
+`talkIn` reaching both; **the guest reaching the room bus and never the guest
+bus**; a guest arriving shut rather than on air; the cue never reaching the room;
+the faders ramping, clamping, and cutting faster than they fade; and a browser
+with no stream destination falling back to silence rather than throwing.
+
+The real assertion of the milestone is not in that file, though: it is
+`qa:voice` passing unchanged, in two real browsers, with the microphone rig
+rebuilt underneath it.
 
 **C2 is done when** `npm run qa:voice` passes with no behavioural change and the
 console can open the mesh with no microphone granted.
@@ -752,7 +794,7 @@ for building it this way.
 | | | Risk | Rough size | Ships alone |
 |---|---|---|---|---|
 | C1 | The floor, no audio | Low | **built** — ~1,000 lines with tests | **Yes** |
-| C2 | Extract `useAirMixer` | Low | ~200 lines, no new behaviour | Yes |
+| C2 | Extract `useAirMixer` | Low | **built** — ~700 lines with tests | Yes |
 | C3 | The guest's sound check | Low | ~250 lines | **Yes** |
 | C4 | The talk channel, cue only | **High** | ~250 lines | **Yes** — audition |
 | C5 | Mix-minus, on air, the cut | Medium | ~150 lines | — |

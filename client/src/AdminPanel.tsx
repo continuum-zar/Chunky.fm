@@ -44,6 +44,7 @@ import type {
 import type { AdminSession } from './hooks/useAdminSession.js'
 import { type MicInput, useMicInput } from './hooks/useMicInput.js'
 import type { StationConnection, StationStatus } from './lib/station.js'
+import { type AirMixerHandle, useAirMixer } from './hooks/useAirMixer.js'
 import { VOICE_CARRIES } from './lib/hand.js'
 import { HEALTH, type PeerState, hearingCount, orderByHealth } from './lib/reach.js'
 import { useVoiceBroadcast } from './hooks/useVoice.js'
@@ -361,6 +362,15 @@ function Controls({
   // Held here rather than arriving on the socket: who has been muted is
   // admin-only, so it is never broadcast. See routes/mutes.ts.
   const [muted, setMuted] = useState<string[]>([])
+  /**
+   * What goes out, and to whom.
+   *
+   * Owned by the console rather than by the mic card, and that is the point of
+   * it: the buses outlive any one microphone, so changing input device rebuilds
+   * the rig without the room's connections noticing, and a guest can be on air
+   * through a console whose own microphone was never opened.
+   */
+  const mixer = useAirMixer()
 
   const refreshLibrary = useCallback(async () => {
     try {
@@ -522,8 +532,21 @@ function Controls({
   )
 
   const bringUp = useCallback(
-    (listener: number) => void floorAction(() => api.floor('invite', listener)),
-    [api, floorAction],
+    (listener: number) => {
+      // Build the buses here, if nothing has yet.
+      //
+      // This is a gesture and the guest's acceptance is not, which is the whole
+      // reason it happens on this click rather than when they come up: an audio
+      // context starts suspended and only a gesture may resume one, so a mixer
+      // built a moment later would be a graph nothing can wake. It is also the
+      // second of the two doors into `ensure` — the first is opening the
+      // microphone — and before this existed there was no bus at all unless
+      // somebody had granted one, which meant a guest could be on air with no
+      // connections to carry them.
+      mixer.ensure()
+      void floorAction(() => api.floor('invite', listener))
+    },
+    [api, floorAction, mixer],
   )
   const standDown = useCallback(
     () => void floorAction(() => api.floor('drop')),
@@ -612,6 +635,8 @@ function Controls({
             listeners={listeners}
             iceServers={iceServers}
             subscribe={subscribe}
+            mixer={mixer}
+            floor={floor}
             onOpen={openMic}
             onClose={closeMic}
             onRenew={renewMic}
@@ -714,6 +739,8 @@ function MicCard({
   listeners,
   iceServers,
   subscribe,
+  mixer,
+  floor,
   onOpen,
   onClose,
   onRenew,
@@ -733,6 +760,13 @@ function MicCard({
   listeners: Listener[] | null
   iceServers: RTCIceServer[] | null
   subscribe(reader: (message: ServerMessage) => void): () => void
+  /**
+   * What goes out, and to whom. Held by the console rather than by this card,
+   * because it outlives any one microphone: see `useAirMixer`.
+   */
+  mixer: AirMixerHandle
+  /** Who else is talking, which is the other reason the mesh comes up. */
+  floor: FloorSnapshot | null
   onOpen(): void
   onClose(): void
   onRenew(): void
@@ -743,7 +777,23 @@ function MicCard({
   // The microphone itself, which at this stage feeds a meter and a pair of
   // headphones and nothing else. See `useMicInput`, and `SoundCheck` below for
   // why it is worth having before there is anywhere for the voice to go.
-  const input = useMicInput()
+  const input = useMicInput(mixer)
+
+  /**
+   * Whether there is anything of this console's on the bus.
+   *
+   * The mesh comes up for this and goes down without it. It used to be "the
+   * microphone is open", which was the same thing right up until a listener
+   * could be brought up: a guest talking while whoever runs the decks says
+   * nothing is a broadcast with no microphone in it, and a room with no
+   * connections to carry it.
+   *
+   * Deliberately not "always, while on air". Warm connections all evening would
+   * save the second of negotiation at the start of every break, and would also
+   * hold a relay allocation open per listener who needs one, all night, for
+   * silence. Today's rule is the cheaper one; this only widens it by a guest.
+   */
+  const sending = input.live || floor?.speaker != null
 
   /**
    * The voice, out to the room.
@@ -770,7 +820,11 @@ function MicCard({
   const broadcast = useVoiceBroadcast({
     connection,
     me,
-    track: input.track,
+    // The mixer's bus, not the microphone's: one track for the life of the
+    // console, so changing input device rebuilds the rig without the room's
+    // connections noticing. Null when there is nothing to send, which is what
+    // takes them down.
+    track: sending ? mixer.roomTrack : null,
     targets,
     iceServers,
   })
@@ -992,7 +1046,7 @@ function MicCard({
 
       {/* Only during a broadcast. Off air there are no connections by design,
           and a list saying so would be reporting a decision as a fault. */}
-      {input.track !== null && onAir && <VoiceReach room={room} peers={broadcast.peers} />}
+      {sending && onAir && <VoiceReach room={room} peers={broadcast.peers} />}
 
       <label className="mic__duck">
         <span className="mic__duck-label">

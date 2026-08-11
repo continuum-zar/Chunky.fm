@@ -1,4 +1,5 @@
 import { type RefObject, useCallback, useEffect, useRef, useState } from 'react'
+import type { AirMixerHandle } from './useAirMixer.js'
 import {
   type InputDevice,
   clippedIn,
@@ -10,11 +11,11 @@ import {
 } from '../lib/mic-input.js'
 
 /**
- * The microphone on the console: level, monitoring, and the track that goes out.
+ * The microphone on the console: level, monitoring, and where it plugs in.
  *
  *     getUserMedia ──▶ MediaStreamSource ──┬──▶ AnalyserNode          (the meter)
  *                                          ├──▶ monitor ──▶ speakers  (optional)
- *                                          └──▶ talk ──▶ StreamDest   (the peers)
+ *                                          └──▶ talk ──▶ mixer.talkIn (the room)
  *
  * The third branch is worth explaining, because the obvious way to mute a
  * microphone is `track.enabled = false` and that is what this deliberately does
@@ -22,14 +23,22 @@ import {
  * including the analyser — so the meter would die the moment you stopped
  * talking, which is exactly when somebody is most likely to be looking at it to
  * set their level. Instead the capture runs continuously, the meter reads it
- * always, and what the peers receive comes from a gain node that is turned down
+ * always, and what the room receives comes from a gain node that is turned down
  * between breaks. Multiplying by zero is as silent as disabling, and unlike
  * disabling it can be ramped, so a break does not open with a click.
  *
- * Its own AudioContext, deliberately separate from the one the music sits in.
- * A console reached from `#on-air` is still playing the station — `joined`
- * survives the trip — so the two graphs coexist on the same page and have
- * nothing to say to each other.
+ * What this no longer owns is the bus. `talk` used to end in a stream
+ * destination here, which meant there was nothing to send until `getUserMedia`
+ * had succeeded — and therefore no peer connections either. A guest talking
+ * while whoever runs the decks says nothing needs the second without the first,
+ * so the buses moved to `useAirMixer` and this connects into one. It also means
+ * the rig can be torn down and rebuilt — which is exactly what changing input
+ * device does — without the room's connections noticing.
+ *
+ * The context comes from the mixer, and is deliberately not the one the music
+ * sits in. A console reached from `#on-air` is still playing the station —
+ * `joined` survives the trip — so the two graphs coexist on the same page and
+ * have nothing to say to each other.
  */
 
 export type MicInputStatus =
@@ -64,14 +73,13 @@ export interface MicInput {
    */
   meterRef: RefObject<HTMLDivElement | null>
   /**
-   * What the peers are sent, or null while the mic is shut.
+   * Whether the rig is open and plugged into the mixer.
    *
-   * Not the capture track: this one comes off the end of the graph, past the
-   * gain that opens and closes with the talk button. One track object for the
-   * life of the rig, so a room's worth of peer connections can all be handed
-   * the same one.
+   * What used to be `track` being non-null. The track itself belongs to the
+   * mixer now and outlives any one microphone, so what the console needs from
+   * here is not "what do I send" but "is there anything of mine on the bus".
    */
-  track: MediaStreamTrack | null
+  live: boolean
   open(): void
   close(): void
   choose(deviceId: string | null): void
@@ -93,24 +101,27 @@ interface Rig {
   analyser: AnalyserNode
   monitor: GainNode
   talk: GainNode
-  outbound: MediaStreamAudioDestinationNode
   frame: number | null
 }
 
+/**
+ * Everything this hook made, and nothing it borrowed.
+ *
+ * The context and the buses belong to the mixer and survive this: closing them
+ * here would take the room's connections down every time somebody changed
+ * input device, which rebuilds the rig. What goes is the capture — first, so
+ * the browser's recording indicator is off before anything else can fail — and
+ * the three nodes hung off it.
+ */
 function teardown(rig: Rig): void {
   if (rig.frame !== null) cancelAnimationFrame(rig.frame)
-  // The capture tracks first: this is what turns the browser's recording
-  // indicator off, and leaving one running because a context failed to close
-  // would leave the console looking like it was listening to the room.
   for (const track of rig.stream.getTracks()) track.stop()
-  for (const track of rig.outbound.stream.getTracks()) track.stop()
   rig.talk.disconnect()
   rig.monitor.disconnect()
   rig.analyser.disconnect()
-  void rig.context.close().catch(() => undefined)
 }
 
-export function useMicInput(): MicInput {
+export function useMicInput(mixer: AirMixerHandle): MicInput {
   const [wanted, setWanted] = useState(false)
   /**
    * Bumped on every ask, and in the effect's dependencies.
@@ -127,7 +138,6 @@ export function useMicInput(): MicInput {
   const [onSpeakers, setOnSpeakers] = useState(false)
   const [monitoring, setMonitoring] = useState(false)
   const [talking, setTalking] = useState(false)
-  const [track, setTrack] = useState<MediaStreamTrack | null>(null)
 
   const meterRef = useRef<HTMLDivElement | null>(null)
   const rigRef = useRef<Rig | null>(null)
@@ -135,6 +145,10 @@ export function useMicInput(): MicInput {
   // monitoring on and off never has to rebuild the graph.
   const monitoringRef = useRef(monitoring)
   monitoringRef.current = monitoring
+  // Read inside the effect rather than in its dependencies: `ensure` is stable,
+  // and a handle that changed identity would re-acquire the microphone.
+  const mixerRef = useRef(mixer)
+  mixerRef.current = mixer
 
   const refreshDevices = useCallback(async () => {
     if (!navigator.mediaDevices?.enumerateDevices) return
@@ -184,7 +198,19 @@ export function useMicInput(): MicInput {
           return
         }
 
-        const context = new AudioContext()
+        // The mixer's, not one of this hook's own, and built on the click that
+        // asked for the microphone. See `useAirMixer`.
+        const air = mixerRef.current.ensure()
+        const context = air?.context ?? null
+        if (!air || !context) {
+          // Nothing to recover, and the capture has to go back: a browser
+          // holding a microphone open for a graph that was never built would
+          // show the recording indicator all evening for no sound at all.
+          for (const track of stream.getTracks()) track.stop()
+          setStatus('failed')
+          setError('this browser has no audio engine to run the mic through')
+          return
+        }
         const source = context.createMediaStreamSource(stream)
         const analyser = context.createAnalyser()
         // Small enough to be current — a meter reading 40ms ago is a meter
@@ -199,18 +225,19 @@ export function useMicInput(): MicInput {
         // would put a live microphone on the air with nobody holding anything.
         const talk = context.createGain()
         talk.gain.value = 0
-        const outbound = context.createMediaStreamDestination()
         source.connect(analyser)
         source.connect(monitor)
         source.connect(talk)
-        talk.connect(outbound)
+        // Into the mixer rather than into a destination of its own. From here
+        // the room bus and the guest bus both carry this, which is what lets
+        // somebody being interviewed hear the person interviewing them.
+        talk.connect(air.talkIn)
         monitor.connect(context.destination)
 
-        const rig: Rig = { stream, context, analyser, monitor, talk, outbound, frame: null }
+        const rig: Rig = { stream, context, analyser, monitor, talk, frame: null }
         rigRef.current = rig
-        setTrack(outbound.stream.getAudioTracks()[0] ?? null)
         // Opening the mic is a click, so the context can be woken here.
-        if (context.state === 'suspended') void context.resume().catch(() => undefined)
+        air.resume()
 
         const samples = new Uint8Array(analyser.fftSize)
         let level = 0
@@ -268,7 +295,6 @@ export function useMicInput(): MicInput {
       cancelled = true
       const rig = rigRef.current
       rigRef.current = null
-      setTrack(null)
       // Nothing is being sent down a rig that no longer exists, and a stale
       // `true` here would reopen the gain the instant one was rebuilt.
       setTalking(false)
@@ -335,7 +361,7 @@ export function useMicInput(): MicInput {
     onSpeakers,
     monitoring,
     meterRef,
-    track,
+    live: status === 'live',
     open,
     close,
     choose,
