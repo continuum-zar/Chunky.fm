@@ -1,5 +1,6 @@
 import type { AirSnapshot } from './air.js'
 import { type ChatMessage, MESSAGE_MAX_LENGTH, normalizeMessageText } from './chat.js'
+import type { FloorSnapshot } from './floor.js'
 import type { Play } from './history.js'
 import type { MicSnapshot } from './mic.js'
 import type { PlaybackSnapshot } from './playback.js'
@@ -122,6 +123,42 @@ export interface ScheduleMessage {
 export type MicMessage = MicSnapshot & { type: 'mic' }
 
 /**
+ * Who, besides the decks, is allowed to talk. Sent on connect and on every
+ * change.
+ *
+ * The mic frame beside this one says whether the music should sit down and how
+ * far; this says whose voice it is sitting down for. Kept apart for the reason
+ * the mic is kept out of `state`: they change on entirely different schedules —
+ * the mic twice a sentence, the floor twice an evening — and folding them
+ * together would ship the whole call state every time somebody drew breath.
+ *
+ * `invited` is broadcast rather than addressed to the one socket it concerns.
+ * The guest reads their own id off it, which spares the station a frame that
+ * exists to be sent to one person, and a room that can see somebody being
+ * brought up reads the pause before a voice for what it is. The private half of
+ * this feature is `hands`, which is a different frame with a different audience.
+ */
+export type FloorMessage = FloorSnapshot & { type: 'floor' }
+
+/**
+ * Who has asked for the mic. To the decks, and to nobody else.
+ *
+ * The only frame the station volunteers to a subset of its sockets, and the
+ * closest thing here to `wished`, which goes to one. The reasoning is the wish
+ * book's: a raised hand is a request addressed to whoever runs the decks, not
+ * an announcement to the room. Put it in front of everybody and it becomes a
+ * queue the room can see, which is a social cost paid by the shyest person in
+ * it and a thing people will be nagged about.
+ *
+ * Sent to a console on connect as well as on change, so one opened after three
+ * hands went up does not start empty.
+ */
+export interface HandsMessage {
+  type: 'hands'
+  hands: Listener[]
+}
+
+/**
  * What's coming up. Kept out of `state` on purpose: playback changes several
  * times a track and the queue rarely does, so folding them together would ship
  * the whole queue on every seek.
@@ -241,6 +278,17 @@ export type SocketErrorCode =
   | 'empty_wish'
   /** This station was built without a wish book. */
   | 'no_wishes'
+  /** This station was built without a floor: nobody but the decks can talk. */
+  | 'no_floor'
+  /**
+   * Took a microphone that was never offered.
+   *
+   * The whole of the permission story on the listener's side, and a refusal
+   * rather than a silent drop for the reason `not_the_decks` is one: a client
+   * that believes it is up would go on to offer a voice nobody is listening
+   * for, and would look, to the person holding it, exactly like being on air.
+   */
+  | 'not_invited'
   /** Doing that faster than the station will take it. */
   | 'slow_down'
   /**
@@ -278,7 +326,7 @@ export type SocketErrorCode =
  * to know which composer. Without it, a wish refused for pace also lights up the
  * chat, telling someone a message they never sent was not sent.
  */
-export type SocketErrorAbout = 'join' | 'say' | 'wish' | 'signal'
+export type SocketErrorAbout = 'join' | 'say' | 'wish' | 'signal' | 'hand'
 
 export interface ErrorMessage {
   type: 'error'
@@ -305,6 +353,8 @@ export type ServerMessage =
   | AirMessage
   | ScheduleMessage
   | MicMessage
+  | FloorMessage
+  | HandsMessage
   | QueueMessage
   | PresenceMessage
   | ChatMessagesMessage
@@ -377,7 +427,38 @@ export interface SignalClientMessage {
   payload: unknown
 }
 
-export type ClientMessage = PingMessage | JoinMessage | SayMessage | WishMessage | SignalClientMessage
+/**
+ * "I'd like to say something", and the two answers to being taken up on it.
+ *
+ * On the socket rather than over HTTP, alongside `say` and `wish`, and for the
+ * same reason both of those are: a listener has no credentials, so this is the
+ * only channel they have. The console's half of the same conversation — who
+ * gets brought up, and who gets stood down — goes over HTTP where the admin
+ * gate is, which leaves the rule intact rather than bending it.
+ *
+ * Carries no id and no nickname, for the reason `say` carries no author: the
+ * socket is the identity, and the roster already knows what it is called. A
+ * frame that named its own listener would be a way to raise somebody else's
+ * hand, or to take a microphone that was offered to them.
+ *
+ * `lower` does three jobs — withdraw a hand, decline an invitation, come down
+ * off the mic — because they are one intent, and which of the three it is
+ * depends only on state the station already holds. Three verbs would be three
+ * chances for a client to pick the wrong one, and the worst of those is a guest
+ * pressing *leave* and staying on air.
+ */
+export interface HandMessage {
+  type: 'hand'
+  action: 'raise' | 'lower' | 'accept'
+}
+
+export type ClientMessage =
+  | PingMessage
+  | JoinMessage
+  | SayMessage
+  | WishMessage
+  | HandMessage
+  | SignalClientMessage
 
 /**
  * Frames that read as an attempt to drive the station.
@@ -412,6 +493,11 @@ const COMMAND_TYPES = new Set([
   // travels the other way, and a client that tries to send one is a client
   // that has mistaken being told for being able to tell.
   'mic',
+  // Bringing somebody up is the console's decision and goes the same way. Note
+  // that `hand` — the listener's half — is not here and never will be: it is
+  // the one frame in this pair that has no gate to be behind, because asking
+  // is not deciding.
+  'floor',
 ])
 
 /** Either a message the socket will act on, or why it won't. */
@@ -433,6 +519,14 @@ export function scheduleMessage(next: ScheduleMessage['schedule']): ScheduleMess
 
 export function micMessage(snapshot: MicSnapshot): MicMessage {
   return { type: 'mic', ...snapshot }
+}
+
+export function floorMessage(snapshot: FloorSnapshot): FloorMessage {
+  return { type: 'floor', ...snapshot }
+}
+
+export function handsMessage(hands: Listener[]): HandsMessage {
+  return { type: 'hands', hands }
 }
 
 export function youMessage(id: number, decks: boolean): YouMessage {
@@ -538,6 +632,21 @@ export function parseClientMessage(raw: string): ParsedClientMessage {
       return { ok: false, code: 'empty_wish', error: 'an empty wish is not a wish', about: 'wish' }
     }
     return { ok: true, message: { type: 'wish', text } }
+  }
+  if (message.type === 'hand' && typeof message.action === 'string') {
+    // The action is checked here and the *state* is checked in the socket
+    // layer, which is the only place that knows whether this listener was
+    // invited, is muted, or has said who they are. Same division as signalling
+    // beneath it: the parser owns the shape, the station owns the rules.
+    if (message.action !== 'raise' && message.action !== 'lower' && message.action !== 'accept') {
+      return {
+        ok: false,
+        code: 'unrecognised_message',
+        error: 'a hand goes up, comes down, or takes what was offered',
+        about: 'hand',
+      }
+    }
+    return { ok: true, message: { type: 'hand', action: message.action } }
   }
   if (message.type === 'signal') {
     // `to` is checked here; *who may address it* is checked in the socket

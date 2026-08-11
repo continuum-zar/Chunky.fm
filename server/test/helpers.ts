@@ -10,6 +10,7 @@ import type { ChatLog } from '../src/chat.js'
 import type { Config } from '../src/config.js'
 import type { OnAir } from '../src/air.js'
 import type { Schedule } from '../src/schedule.js'
+import type { Floor } from '../src/floor.js'
 import type { Mic } from '../src/mic.js'
 import type { Mutes } from '../src/mutes.js'
 import type { Padding } from '../src/padding.js'
@@ -37,6 +38,7 @@ export interface Harness {
   schedule: Schedule
   mutes: Mutes
   mic: Mic
+  floor: Floor
   padding: Padding
   lyrics: LyricsService
   /** Only set when the harness was started with `listen: true`. */
@@ -71,6 +73,11 @@ export interface HarnessOptions {
   signInRefillMs?: number
   /** How long an open mic lasts without a renew. See `Mic`. */
   micLeaseMs?: number
+  /** How long an invitation to the mic stands. See `Floor`. */
+  inviteTtlMs?: number
+  /** Hand frames a socket may send back to back. */
+  handBurst?: number
+  handRefillMs?: number
   /**
    * How often a lapsed mic is swept up. The tests that are about expiry call
    * `mic.sweep()` by hand against a clock they drive, so this is only here for
@@ -109,6 +116,9 @@ export async function startHarness(
     signInBurst,
     signInRefillMs,
     micLeaseMs,
+    inviteTtlMs,
+    handBurst,
+    handRefillMs,
     micSweepIntervalMs,
     lyricsFetch = async () => new Response(null, { status: 404 }),
     turnFetch = async () => new Response(null, { status: 404 }),
@@ -172,6 +182,9 @@ export async function startHarness(
     signInBurst,
     signInRefillMs,
     micLeaseMs,
+    inviteTtlMs,
+    handBurst,
+    handRefillMs,
     micSweepIntervalMs,
     lyricsFetch,
     turnFetch,
@@ -197,6 +210,7 @@ export async function startHarness(
     schedule: app.schedule,
     mutes: app.mutes,
     mic: app.mic,
+    floor: app.floor,
     padding: app.padding,
     lyrics: app.lyrics,
     wsUrl,

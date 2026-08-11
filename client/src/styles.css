@@ -2821,6 +2821,79 @@ h2 {
   line-height: 16.5px;
 }
 
+/* Being asked up, and being up.
+
+   An outage block rather than a panel, and above every view at every width,
+   because that is what the two states need: an invitation runs out, and an open
+   microphone is the one thing on this page somebody must never have to go
+   looking for. A notice tucked inside a panel behind a route is a microphone
+   somebody forgot was open. */
+.called__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+/* Louder than the invitation above it, and deliberately so: one of these is an
+   offer somebody can ignore, and the other is a live microphone. Borrowed from
+   the on-air lamp rather than invented, so the colour already means "you are
+   audible" everywhere else on the station. */
+.called--up {
+  background: var(--live-wash);
+  box-shadow: inset 0 0 0 1px rgb(251 44 54 / 30%);
+}
+
+/* Who else, besides whoever runs the decks, is allowed to talk.
+
+   Under the mic card because it is the same control surface — who is talking
+   over the music, and whether it is you — and because the one thing anybody
+   ever needs from it in a hurry is the button that takes the mic back. That
+   button is therefore always in the same place, whatever state the card is in.
+
+   The list this draws is the only thing on the console the room is never sent.
+   A raised hand is a request addressed to whoever runs the decks, exactly like
+   a wish, and a queue the room could see would be a social cost paid by the
+   shyest person in it. */
+.card--floor {
+  padding-bottom: 16px;
+}
+
+.floor__hands {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  /* Long enough to read at a glance, capped so a room full of raised hands
+     does not push the rest of the column off the screen. Same reasoning, and
+     the same number, as the reach list below. */
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.floor__hand,
+.floor__up {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 16px;
+  font-size: 11px;
+  line-height: 16.5px;
+}
+
+/* Whoever is up sits a little away from the list it came out of: this is a
+   state rather than a queue, and it should not read as the first row of one. */
+.floor__up {
+  padding-top: 10px;
+}
+
+.floor__who {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-dim);
+}
+
 /* Who can actually hear the mic.
  *
  * Quiet by default, because the answer is usually "everyone" and a panel that

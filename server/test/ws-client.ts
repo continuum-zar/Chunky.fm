@@ -4,6 +4,8 @@ import type {
   ScheduleMessage,
   ChatMessagesMessage,
   ClientMessage,
+  FloorMessage,
+  HandsMessage,
   HistoryMessage,
   MicMessage,
   PresenceMessage,
@@ -93,6 +95,15 @@ export class TestClient {
 
   async nextMic(timeoutMs?: number): Promise<MicMessage> {
     return (await this.waitFor((m) => m.type === 'mic', timeoutMs)) as MicMessage
+  }
+
+  async nextFloor(timeoutMs?: number): Promise<FloorMessage> {
+    return (await this.waitFor((m) => m.type === 'floor', timeoutMs)) as FloorMessage
+  }
+
+  /** Only a console ever sees one of these; see `toDecks`. */
+  async nextHands(timeoutMs?: number): Promise<HandsMessage> {
+    return (await this.waitFor((m) => m.type === 'hands', timeoutMs)) as HandsMessage
   }
 
   async nextState(timeoutMs?: number): Promise<StateMessage> {

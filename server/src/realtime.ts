@@ -2,6 +2,7 @@ import type { IncomingHttpHeaders, Server } from 'node:http'
 import { WebSocket, WebSocketServer } from 'ws'
 import type { AirSnapshot, OnAir } from './air.js'
 import { type ChatLog, RateLimit } from './chat.js'
+import type { Floor, FloorSnapshot } from './floor.js'
 import type { PlayLog } from './history.js'
 import { DEFAULT_DUCK, type Mic, type MicSnapshot } from './mic.js'
 import type { PlaybackSnapshot } from './playback.js'
@@ -14,6 +15,8 @@ import {
   scheduleMessage,
   chatMessages,
   errorMessage,
+  floorMessage,
+  handsMessage,
   historyMessage,
   micMessage,
   parseClientMessage,
@@ -61,6 +64,14 @@ export interface RealtimeOptions {
    * have to build one to hear itself think.
    */
   mic?: Mic
+  /**
+   * Who, besides the decks, may talk. Optional like `mic`, and absent means a
+   * station where a hand can never go up: every `hand` frame is refused by
+   * name, and no listener is ever offered anything. That is the right shape for
+   * every harness that is about something else, and it is also the honest
+   * description of the station before this existed.
+   */
+  floor?: Floor
   /** Who has been asked to stop talking. Omit and nobody is muted. */
   mutes?: Mutes
   /**
@@ -99,6 +110,10 @@ export interface RealtimeOptions {
   wishBurst?: number
   /** How long one of those costs to earn back. */
   wishRefillMs?: number
+  /** Hand frames a socket may send back to back. */
+  handBurst?: number
+  /** How long one of those costs to earn back. */
+  handRefillMs?: number
   /**
    * Which upgrades are the decks.
    *
@@ -172,6 +187,17 @@ const DEFAULT_JOIN_REFILL_MS = 5_000
 const DEFAULT_WISH_BURST = 3
 const DEFAULT_WISH_REFILL_MS = 30_000
 /**
+ * Putting a hand up and taking it down again is a person changing their mind,
+ * which happens a few times and then stops.
+ *
+ * Paced for the reason a join is: this is one of the few things a listener can
+ * send that costs somebody *else* something. A raised hand puts a row on the
+ * console, and a socket flapping one would be a list that will not sit still in
+ * front of the one person who has to read it while a record is ending.
+ */
+const DEFAULT_HAND_BURST = 5
+const DEFAULT_HAND_REFILL_MS = 3_000
+/**
  * Looser than anything a person types, because this is a machine answering.
  *
  * Setting up one voice is an answer and then a dribble of ICE candidates, a
@@ -217,6 +243,9 @@ const ALWAYS_ON: AirSnapshot = { live: true, since: null }
  */
 const SHUT: MicSnapshot = { live: false, duckTo: DEFAULT_DUCK, since: null }
 
+/** What a station with no `floor` reports: nobody up, nobody on their way up. */
+const EMPTY: FloorSnapshot = { speaker: null, invited: null }
+
 /**
  * Attaches the station's websocket surface to an existing HTTP server.
  *
@@ -245,6 +274,7 @@ export function attachRealtime({
   air,
   schedule,
   mic,
+  floor,
   mutes,
   padding,
   chat,
@@ -260,6 +290,8 @@ export function attachRealtime({
   joinRefillMs = DEFAULT_JOIN_REFILL_MS,
   wishBurst = DEFAULT_WISH_BURST,
   wishRefillMs = DEFAULT_WISH_REFILL_MS,
+  handBurst = DEFAULT_HAND_BURST,
+  handRefillMs = DEFAULT_HAND_REFILL_MS,
   isAdmin,
   onDecksGone,
   signalBurst = DEFAULT_SIGNAL_BURST,
@@ -273,6 +305,7 @@ export function attachRealtime({
   const onAir = (): boolean => air?.live ?? true
   const airSnapshot = (): AirSnapshot => air?.snapshot() ?? ALWAYS_ON
   const micSnapshot = (): MicSnapshot => mic?.snapshot() ?? SHUT
+  const floorSnapshot = (): FloorSnapshot => floor?.snapshot() ?? EMPTY
   const wss = new WebSocketServer({
     server,
     path,
@@ -311,6 +344,28 @@ export function attachRealtime({
     const payload = JSON.stringify(message)
     for (const socket of wss.clients) {
       if (socket.readyState === WebSocket.OPEN) socket.send(payload)
+    }
+  }
+
+  /**
+   * To whoever is running the station, and to nobody else.
+   *
+   * The roster cannot address this and neither can `broadcast`: what is wanted
+   * is every console, which is a fact about connections rather than about
+   * people, and `deckSockets` is the only thing that knows it. Nothing sensitive
+   * has ever needed a route like this — the wish book is read over HTTP behind
+   * the gate — but the hands do, because they change while somebody is watching
+   * and a list you have to refresh is a list nobody looks at.
+   *
+   * Two tabs open on the console get one each, which is correct: both are the
+   * decks, and both are showing the same list.
+   */
+  function toDecks(message: ServerMessage): void {
+    if (deckSockets.size === 0) return
+    const payload = JSON.stringify(message)
+    for (const id of deckSockets) {
+      const socket = socketsById.get(id)
+      if (socket?.readyState === WebSocket.OPEN) socket.send(payload)
     }
   }
 
@@ -417,6 +472,79 @@ export function attachRealtime({
   }
 
   /**
+   * Asking for the mic, changing your mind, and taking what was offered.
+   *
+   * The same gates as a wish, in the same order, and for the same reasons: off
+   * air first because it is the truest thing about the refusal, then the roster,
+   * then the mute, then the pace. A hand is not text, but it is the same kind of
+   * act — a listener addressing whoever runs the decks, signed with the name
+   * their socket is listed under — and a mute that left this open would just
+   * move where somebody was shouting from the chat to the microphone.
+   *
+   * The nickname comes off the roster rather than out of the frame, for the
+   * reason a chat message's author does. This is the only place a name enters
+   * `Floor` at all, which is why that object never has to know what a roster is.
+   *
+   * `raise` and `lower` are silent when they change nothing — a hand already up,
+   * or one that was not — because both are the ordinary result of a client and
+   * a station briefly disagreeing, and neither is worth a refusal. `accept` is
+   * the exception: a socket that believes it is on air when it is not would go
+   * on to offer a voice nobody is listening for, and would look, to the person
+   * holding it, exactly like being live.
+   */
+  function hand(
+    socket: WebSocket,
+    listenerId: number,
+    limit: RateLimit,
+    action: 'raise' | 'lower' | 'accept',
+  ): void {
+    if (!floor) {
+      send(socket, errorMessage('no_floor', 'nobody but the decks talks here', 'hand'))
+      return
+    }
+    if (!onAir()) {
+      send(socket, errorMessage('off_air', 'the station is not on air', 'hand'))
+      return
+    }
+    const nickname = presence.nicknameOf(listenerId)
+    if (nickname === null) {
+      send(socket, errorMessage('not_joined', 'name yourself before asking for the mic', 'hand'))
+      return
+    }
+    if (mutes?.has(nickname)) {
+      send(socket, errorMessage('muted', 'the decks have muted you', 'hand'))
+      return
+    }
+    // After the name and the mute, before anything is done, exactly as a wish
+    // is paced: being refused should never also cost a token.
+    //
+    // `lower` is deliberately inside the pace check rather than exempt from it.
+    // Letting go of something should be free, and it very nearly is — but the
+    // cheapest way to make the console's list flicker is to raise and lower in
+    // a loop, and exempting half of that pair would leave the loop open.
+    if (!limit.take()) {
+      send(socket, errorMessage('slow_down', 'slow down', 'hand'))
+      return
+    }
+
+    if (action === 'raise') {
+      if (floor.raise(listenerId, nickname)) {
+        log?.info({ listener: listenerId, hands: floor.hands().length }, 'a hand went up')
+      }
+      return
+    }
+    if (action === 'lower') {
+      if (floor.lower(listenerId)) log?.info({ listener: listenerId }, 'a hand came down')
+      return
+    }
+    if (!floor.accept(listenerId)) {
+      send(socket, errorMessage('not_invited', 'nobody offered you the mic', 'hand'))
+      return
+    }
+    log?.info({ listener: listenerId, nickname }, 'a listener took the mic')
+  }
+
+  /**
    * Puts a socket on the roster under a name, and tells the room.
    *
    * Paced, because this is the one frame a listener can send that costs every
@@ -439,7 +567,14 @@ export function attachRealtime({
     }
     // Everyone, including the joiner: the roster they are now on is the same
     // frame the rest of the room gets, so there is one code path.
-    if (presence.join(listenerId, nickname)) broadcastPresence()
+    if (!presence.join(listenerId, nickname)) return
+    // The roster is the truth about names, and it just moved. Somebody who
+    // raised a hand and then thought better of the name they picked would
+    // otherwise be introduced to the room, on the on-air lamp, by a name they
+    // had already abandoned. Reads the roster back rather than trusting the
+    // argument, because `Presence.join` is what decides what a name becomes.
+    floor?.rename(listenerId, presence.nicknameOf(listenerId) ?? nickname)
+    broadcastPresence()
   }
 
   /**
@@ -518,6 +653,7 @@ export function attachRealtime({
     const chatLimit = new RateLimit({ burst: chatBurst, refillMs: chatRefillMs })
     const joinLimit = new RateLimit({ burst: joinBurst, refillMs: joinRefillMs })
     const wishLimit = new RateLimit({ burst: wishBurst, refillMs: wishRefillMs })
+    const handLimit = new RateLimit({ burst: handBurst, refillMs: handRefillMs })
     const signalLimit = new RateLimit({ burst: signalBurst, refillMs: signalRefillMs })
 
     // First of all, and about this socket rather than about the station: an
@@ -538,6 +674,15 @@ export function attachRealtime({
     // second of a song at full volume under somebody's voice, corrected a
     // frame later, which is a worse arrival than a quiet one.
     send(socket, micMessage(micSnapshot()))
+    // Straight after the mic, and before the music, for the same reason: a
+    // listener arriving mid-call comes in already ducked *and* already knowing
+    // whose voice they are about to hear, rather than being told a frame later
+    // that the quiet music has somebody talking over it.
+    send(socket, floorMessage(floorSnapshot()))
+    // Who has asked, but only to a console. A listener has no business knowing
+    // this, and one that opened after three hands went up would otherwise start
+    // empty and stay that way until somebody changed their mind.
+    if (floor && deckSockets.has(listenerId)) send(socket, handsMessage(floor.hands()))
     // Drop straight into the moment: the snapshot alone is enough to align.
     send(socket, stateMessage(playback.snapshot()))
     send(socket, queueMessage(queue.list()))
@@ -568,6 +713,7 @@ export function attachRealtime({
       if (message.type === 'join') join(socket, listenerId, joinLimit, message.nickname)
       if (message.type === 'say') say(socket, listenerId, chatLimit, message.text)
       if (message.type === 'wish') wish(socket, listenerId, wishLimit, message.text)
+      if (message.type === 'hand') hand(socket, listenerId, handLimit, message.action)
       if (message.type === 'signal') {
         signal(socket, listenerId, signalLimit, message.to, message.payload)
       }
@@ -578,6 +724,13 @@ export function attachRealtime({
     // only place a listener needs to be taken off the roster.
     socket.on('close', () => {
       socketsById.delete(listenerId)
+      // Before the roster, and unconditionally: a hand, an invitation and a
+      // voice all belong to this socket and none of them outlives it. Unlike
+      // the mic, there is no benefit of the doubt to give here — the mic is
+      // renewed over HTTP and survives a socket blip, while everything the
+      // floor holds *is* the socket. A guest who is merely reconnecting comes
+      // back as a new id, which is a new listener, which is the honest reading.
+      floor?.leave(listenerId)
       // Only on the way to none, and only when this socket was one of them: a
       // console with two tabs open still has decks after one of them closes.
       // Not during a shutdown either, where every socket is on its way out and
@@ -630,6 +783,22 @@ export function attachRealtime({
     )
     broadcast(micMessage(snapshot))
   }
+  const onFloorChange = (snapshot: FloorSnapshot) => {
+    log?.info(
+      {
+        speaker: snapshot.speaker?.id ?? null,
+        invited: snapshot.invited?.id ?? null,
+        listeners: wss.clients.size,
+      },
+      'broadcasting the floor',
+    )
+    broadcast(floorMessage(snapshot))
+  }
+  // Not a broadcast, and the one subscription here that is not. See `toDecks`.
+  const onHandsChange = (hands: Listener[]) => {
+    log?.info({ hands: hands.length, decks: deckSockets.size }, 'telling the decks who asked')
+    toDecks(handsMessage(hands))
+  }
   const onScheduleChange = (next: ScheduledSession | null) => {
     log?.info({ announced: next !== null, listeners: wss.clients.size }, 'broadcasting schedule')
     broadcast(scheduleMessage(next))
@@ -643,6 +812,8 @@ export function attachRealtime({
   air?.on('change', onAirChange)
   schedule?.on('change', onScheduleChange)
   mic?.on('change', onMicChange)
+  floor?.on('change', onFloorChange)
+  floor?.on('hands', onHandsChange)
   padding?.on('change', onPaddingChange)
 
   const onQueueChange = (entries: QueueEntry[]) => {
@@ -676,6 +847,8 @@ export function attachRealtime({
     air?.off('change', onAirChange)
     schedule?.off('change', onScheduleChange)
     mic?.off('change', onMicChange)
+    floor?.off('change', onFloorChange)
+    floor?.off('hands', onHandsChange)
     padding?.off('change', onPaddingChange)
 
     const sockets = [...wss.clients]

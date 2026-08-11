@@ -99,10 +99,10 @@ describe('the socket, over a real connection', () => {
     await harness.cleanup()
   })
 
-  it('opens with the whole room: you, air, schedule, mic, state, queue, roster, history, chat', async () => {
+  it('opens with the whole room: you, air, schedule, mic, floor, state, queue, roster, history, chat', async () => {
     for (let i = 0; i < 5; i++) {
       const client = await TestClient.connect(harness.wsUrl)
-      await client.nextChat() // the last of the nine
+      await client.nextChat() // the last of the ten
       expect(client.seen.map((m) => m.type)).toEqual([
         // Who this socket is, before anything about the station: an offer is
         // addressed to an id, and both ends of one need to know which id is
@@ -121,6 +121,14 @@ describe('the socket, over a real connection', () => {
         // ducked. The other way round, the first thing they hear is half a
         // second of a song at full volume under somebody's voice.
         'mic',
+        // Straight after the mic and still before the music, for the same
+        // reason one step down: a listener arriving mid-call comes in already
+        // ducked *and* already knowing whose voice they are about to hear.
+        //
+        // Note what is not here. A console gets one more frame than this — the
+        // raised hands — and a listener never does, which is the only asymmetry
+        // in the burst and the whole of this feature's privacy story.
+        'floor',
         'state',
         'queue',
         'presence',

@@ -5,6 +5,7 @@ import { mergePlays } from '../lib/history.js'
 import type {
   AirSnapshot,
   ChatMessage,
+  FloorSnapshot,
   Listener,
   MicSnapshot,
   Play,
@@ -80,6 +81,26 @@ export interface Station {
    * should not re-align its audio because somebody drew breath.
    */
   mic: MicSnapshot | null
+  /**
+   * Who, besides the decks, is on the mic — and who has just been asked up.
+   *
+   * Null until the first `floor` frame, which arrives in the connect burst
+   * immediately after `mic`, so a page that came in mid-call knows whose voice
+   * it is about to hear at the same moment it learns to duck for it.
+   *
+   * Beside `mic` rather than folded into it, for the reason `mic` is beside
+   * `air`: they change on entirely different schedules, and a page should not
+   * re-read who is talking every time somebody drew breath.
+   */
+  floor: FloorSnapshot | null
+  /**
+   * Who has asked for the mic. Only ever populated on a console.
+   *
+   * Empty on every other page, and not because the client filters it: the
+   * station sends this frame to the decks and to nobody else. Who is *talking*
+   * is the room's business; who asked is not.
+   */
+  hands: Listener[]
   /** What's coming up. Null until the first queue frame arrives. */
   queue: QueueEntry[] | null
   /** Who else is here. Null until the first roster arrives. */
@@ -149,6 +170,8 @@ export interface Station {
    * after it had already started talking.
    */
   applyMic(snapshot: MicSnapshot): void
+  /** Fold in what `POST /api/floor` just answered. See `applyState`. */
+  applyFloor(snapshot: FloorSnapshot): void
 }
 
 /** Holds the websocket open and tracks the station's broadcast state. */
@@ -173,6 +196,8 @@ export function useStation(
   const [decks, setDecks] = useState<boolean | null>(null)
   const [schedule, setSchedule] = useState<ScheduledSession | null>(null)
   const [mic, setMic] = useState<MicSnapshot | null>(null)
+  const [floor, setFloor] = useState<FloorSnapshot | null>(null)
+  const [hands, setHands] = useState<Listener[]>([])
   const [queue, setQueue] = useState<QueueEntry[] | null>(null)
   const [listeners, setListeners] = useState<Listener[] | null>(null)
   const [padding, setPadding] = useState(0)
@@ -197,6 +222,11 @@ export function useStation(
     setSchedule(null)
     // And its own answer to whether anybody is talking over it.
     setMic(null)
+    // And its own answer to who is allowed to. The hands go with it: a list of
+    // people asking to speak on a station this page is no longer connected to
+    // is a list of decisions nobody can act on.
+    setFloor(null)
+    setHands([])
     // A new socket is a new row in the roster, so whatever this page was called
     // on the last one says nothing about what it is called on this one, and
     // nothing about what it presented on the way in.
@@ -219,6 +249,10 @@ export function useStation(
         if (message.type === 'mic') {
           setMic({ live: message.live, duckTo: message.duckTo, since: message.since })
         }
+        if (message.type === 'floor') {
+          setFloor({ speaker: message.speaker, invited: message.invited })
+        }
+        if (message.type === 'hands') setHands(message.hands)
         if (message.type === 'queue') setQueue(message.entries)
         if (message.type === 'presence') {
           setListeners(message.listeners)
@@ -272,6 +306,7 @@ export function useStation(
    */
   const applySchedule = useCallback((next: ScheduledSession | null) => setSchedule(next), [])
   const applyMic = useCallback((snapshot: MicSnapshot) => setMic(snapshot), [])
+  const applyFloor = useCallback((snapshot: FloorSnapshot) => setFloor(snapshot), [])
   const clearSocketError = useCallback(() => setSocketError(null), [])
 
   return {
@@ -283,6 +318,8 @@ export function useStation(
     decks,
     schedule,
     mic,
+    floor,
+    hands,
     queue,
     listeners,
     padding,
@@ -298,5 +335,6 @@ export function useStation(
     applyAir,
     applySchedule,
     applyMic,
+    applyFloor,
   }
 }

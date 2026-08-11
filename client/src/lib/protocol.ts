@@ -120,6 +120,41 @@ export interface MicMessage {
 /** The same three as they come back from `/api/mic`, without the frame. */
 export type MicSnapshot = Omit<MicMessage, 'type'>
 
+/**
+ * Who, besides the decks, is allowed to talk. Sent on connect and on change.
+ *
+ * The mic frame beside this one says the music should sit down and how far;
+ * this says whose voice it is sitting down for. Carries no audio either — a
+ * guest's voice goes from their browser to the console and out again on the
+ * connections the room already has, and the station holds no more of it than it
+ * holds of the music.
+ *
+ * `invited` is broadcast rather than sent to the one page it concerns. The
+ * guest reads their own id off it, and a room that can see somebody being
+ * brought up reads the pause before a voice for what it is.
+ */
+export interface FloorMessage {
+  type: 'floor'
+  speaker: (Listener & { since: number }) | null
+  invited: (Listener & { expiresAt: number }) | null
+}
+
+/** The same two as they come back from `/api/floor`, without the frame. */
+export type FloorSnapshot = Omit<FloorMessage, 'type'>
+
+/**
+ * Who has asked for the mic. Only a console is ever sent one of these.
+ *
+ * The private half of the floor, and the reason it is a separate frame: who is
+ * talking is the room's business, and who *asked* is not. A queue the room can
+ * see is a social cost paid by the shyest person in it. Same split as the wish
+ * book, for the same reasons.
+ */
+export interface HandsMessage {
+  type: 'hands'
+  hands: Listener[]
+}
+
 /** A track waiting its turn. The id is the entry's, not the track's. */
 export interface QueueEntry {
   id: number
@@ -252,6 +287,8 @@ export type SocketErrorCode =
   | 'muted'
   | 'not_the_decks'
   | 'no_such_peer'
+  | 'no_floor'
+  | 'not_invited'
 
 /**
  * Which frame a refusal is about, when it is about one.
@@ -261,7 +298,7 @@ export type SocketErrorCode =
  * for pace also puts "not sent" under the chat, telling someone a message they
  * never sent went nowhere.
  */
-export type SocketErrorAbout = 'join' | 'say' | 'wish' | 'signal'
+export type SocketErrorAbout = 'join' | 'say' | 'wish' | 'signal' | 'hand'
 
 export interface ErrorMessage {
   type: 'error'
@@ -322,6 +359,8 @@ export type ServerMessage =
   | AirMessage
   | ScheduleMessage
   | MicMessage
+  | FloorMessage
+  | HandsMessage
   | QueueMessage
   | PresenceMessage
   | ChatMessagesMessage
@@ -357,6 +396,23 @@ export interface WishMessage {
 }
 
 /**
+ * "I'd like to say something", and the two answers to being taken up on it.
+ *
+ * On the socket rather than over HTTP, alongside `say` and `wish`, because a
+ * listener has no credentials and this is the only channel they have. The
+ * console's half of the same conversation goes to `/api/floor`, where the admin
+ * gate is.
+ *
+ * `lower` does three jobs — withdraw a hand, decline an invitation, come down
+ * off the mic — because they are one intent, and which of the three it is
+ * depends only on state the station already holds.
+ */
+export interface HandMessage {
+  type: 'hand'
+  action: 'raise' | 'lower' | 'accept'
+}
+
+/**
  * "Pass this to that socket." The only frame the station carries rather than
  * acts on: it has no opinion about SDP, only about who may address whom.
  */
@@ -371,6 +427,7 @@ export type ClientMessage =
   | JoinMessage
   | SayMessage
   | WishMessage
+  | HandMessage
   | SignalClientMessage
 
 export const audioUrl = (track: Track) => `/api/audio/${track.filename}`

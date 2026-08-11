@@ -149,10 +149,19 @@ export interface OnAirProps {
    * this sound", and during a break the answer changes.
    */
   talking?: boolean
+  /**
+   * Whose voice it is, when it is not the decks'.
+   *
+   * The badge already answers "what is this sound", and during a call-in the
+   * honest answer has a name in it. Null the rest of the time, including while
+   * whoever runs the decks is talking: they are the station, and naming them
+   * would be the station introducing itself every time it opened its mouth.
+   */
+  speaker?: string | null
 }
 
 /** The LIVE badge and the line beside it. */
-export function OnAir({ live, idleLabel, talking = false }: OnAirProps) {
+export function OnAir({ live, idleLabel, talking = false, speaker = null }: OnAirProps) {
   return (
     <div className="onair">
       <span className={`onair__badge${live ? '' : ' onair__badge--off'}`}>
@@ -167,7 +176,7 @@ export function OnAir({ live, idleLabel, talking = false }: OnAirProps) {
         role="status"
       >
         <img src={onAirIcon} alt="" width={14} height={14} />
-        {talking ? 'On the mic' : live ? 'On air now' : 'Off air'}
+        {talking ? (speaker ? `${speaker} is on the mic` : 'On the mic') : live ? 'On air now' : 'Off air'}
       </span>
     </div>
   )

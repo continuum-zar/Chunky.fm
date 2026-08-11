@@ -4,6 +4,7 @@ import { OnAir } from './air.js'
 import { ChatLog } from './chat.js'
 import type { Config } from './config.js'
 import type { Db } from './db.js'
+import { Floor } from './floor.js'
 import { PlayLog } from './history.js'
 import { registerErrorHandlers } from './lib/errors.js'
 import { emptyLibrary } from './lib/library.js'
@@ -16,6 +17,7 @@ import { PlaybackState } from './playback.js'
 import { type RealtimeHandle, attachRealtime } from './realtime.js'
 import { hasAdminCredentials, mayListen } from './lib/auth.js'
 import { adminRoutes } from './routes/admin.js'
+import { floorRoutes } from './routes/floor.js'
 import { micRoutes } from './routes/mic.js'
 import { rtcRoutes } from './routes/rtc.js'
 import { mutesRoutes } from './routes/mutes.js'
@@ -50,6 +52,8 @@ declare module 'fastify' {
     mutes: Mutes
     /** Whether somebody is talking over the music. See `Mic`. */
     mic: Mic
+    /** Who, besides the decks, is allowed to talk. See `Floor`. */
+    floor: Floor
     /** Heads the decks added to the headcount. See `Padding`. */
     padding: Padding
     lyrics: LyricsService
@@ -75,6 +79,8 @@ export interface BuildAppOptions {
   micSweepIntervalMs?: number
   /** How long an open mic lasts without a renew. See `MIC_LEASE_MS`. */
   micLeaseMs?: number
+  /** How long an invitation to the mic stands. See `INVITE_TTL_MS`. */
+  inviteTtlMs?: number
   closeGraceMs?: number
   chatHistoryLimit?: number
   playHistoryLimit?: number
@@ -86,6 +92,9 @@ export interface BuildAppOptions {
   joinRefillMs?: number
   wishBurst?: number
   wishRefillMs?: number
+  /** Hand frames a socket may send back to back. */
+  handBurst?: number
+  handRefillMs?: number
   /** Signalling frames a listener may send back to back. The decks are exempt. */
   signalBurst?: number
   signalRefillMs?: number
@@ -106,6 +115,7 @@ export async function buildApp({
   backstopIntervalMs,
   micSweepIntervalMs = DEFAULT_MIC_SWEEP_MS,
   micLeaseMs,
+  inviteTtlMs,
   closeGraceMs,
   chatHistoryLimit,
   playHistoryLimit,
@@ -116,6 +126,8 @@ export async function buildApp({
   joinRefillMs,
   wishBurst,
   wishRefillMs,
+  handBurst,
+  handRefillMs,
   signalBurst,
   signalRefillMs,
   signInBurst,
@@ -212,10 +224,46 @@ export async function buildApp({
   // here, because the lease below is measured against it.
   const mic = new Mic({ now: () => playback.now(), leaseMs: micLeaseMs })
 
+  // Who, besides the decks, is allowed to talk. Holds no audio either: a guest's
+  // voice goes from their browser to the console and out again on the
+  // connections the room already has, and the station carries no more of it than
+  // it carries of the music. What it holds is permission. See `Floor`.
+  const floor = new Floor({ now: () => playback.now(), inviteTtlMs })
+
   // A console that dies mid-sentence would otherwise leave the whole room
-  // listening to a permanently quiet song. See `Mic.sweep`.
-  const micSweep = setInterval(() => mic.sweep(), micSweepIntervalMs)
+  // listening to a permanently quiet song. See `Mic.sweep`. The floor's one
+  // lease — an invitation nobody answered — rides the same interval, because
+  // both are the same kind of housekeeping and neither is worth a timer of its
+  // own. See `Floor.sweep`.
+  const micSweep = setInterval(() => {
+    mic.sweep()
+    floor.sweep()
+  }, micSweepIntervalMs)
   micSweep.unref()
+
+  /**
+   * The mic follows the floor, in both directions, and neither is symmetrical.
+   *
+   * Somebody coming up opens the mic, because the room has to be ducked before
+   * their first word — the same reason a listener arriving mid-break is handed
+   * `mic` before `state`. Note what is deliberately absent: standing a guest
+   * down does *not* shut the mic. You will nearly always say something after
+   * them, and un-ducking between their last word and your first is a swell of
+   * music in the middle of a sentence.
+   *
+   * The mic closing does take the floor with it, and that half is not optional.
+   * A shut mic is an un-ducked room, so a guest still shown as up would be
+   * talking under music at full volume — and the commonest way this happens is
+   * not somebody pressing a button, it is the lease lapsing because the console
+   * died, which is exactly when the station's story about who is talking should
+   * stop being wrong.
+   */
+  floor.on('change', (snapshot) => {
+    if (snapshot.speaker) mic.open()
+  })
+  mic.on('change', (snapshot) => {
+    if (!snapshot.live) floor.drop()
+  })
 
   // Deliberately not wired to the air change below. Everything else in this
   // file is about tonight and goes when tonight does; an announcement is about
@@ -249,7 +297,13 @@ export async function buildApp({
     // Nobody is talking over a station that is off. Only the mic itself: the
     // duck depth is a fader position belonging to whoever runs the decks, not
     // a claim about tonight's room, so it survives. See `Mic.clear`.
+    //
+    // The floor goes with it, and all of it, hands included — unlike the duck
+    // depth there is nothing here belonging to whoever runs the decks. Who is
+    // here, who asked and who is talking are all claims about tonight, and every
+    // one of them is a lie applied to another night. See `Floor.clear`.
     mic.clear()
+    floor.clear()
     // And everything written down during it. Scoping already made all three
     // unreadable; this is about the rows. The chat and the book are free text
     // somebody typed, signed with the name they were using, said to a room that
@@ -277,6 +331,7 @@ export async function buildApp({
   await app.register(sessionRoutes({ config, air }))
   await app.register(scheduleRoutes({ config, schedule }))
   await app.register(micRoutes({ config, mic, air }))
+  await app.register(floorRoutes({ config, floor, air }))
   await app.register(rtcRoutes({ config, turn }))
   await app.register(mutesRoutes({ config, mutes }))
   await app.register(paddingRoutes({ config, padding }))
@@ -298,6 +353,7 @@ export async function buildApp({
     air,
     schedule,
     mic,
+    floor,
     mutes,
     padding,
     // The socket is the station: refusing it is what makes a private station
@@ -323,6 +379,8 @@ export async function buildApp({
     joinRefillMs,
     wishBurst,
     wishRefillMs,
+    handBurst,
+    handRefillMs,
     signalBurst,
     signalRefillMs,
     log: app.log,
@@ -338,6 +396,7 @@ export async function buildApp({
   app.decorate('schedule', schedule)
   app.decorate('mutes', mutes)
   app.decorate('mic', mic)
+  app.decorate('floor', floor)
   app.decorate('padding', padding)
   app.decorate('lyrics', lyrics)
 

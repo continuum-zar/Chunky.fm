@@ -32,6 +32,7 @@ import type {
   AirSnapshot,
   ChatMessage,
   Listener,
+  FloorSnapshot,
   MicSnapshot,
   PlaybackSnapshot,
   ServerMessage,
@@ -43,6 +44,7 @@ import type {
 import type { AdminSession } from './hooks/useAdminSession.js'
 import { type MicInput, useMicInput } from './hooks/useMicInput.js'
 import type { StationConnection, StationStatus } from './lib/station.js'
+import { VOICE_CARRIES } from './lib/hand.js'
 import { HEALTH, type PeerState, hearingCount, orderByHealth } from './lib/reach.js'
 import { useVoiceBroadcast } from './hooks/useVoice.js'
 
@@ -85,6 +87,23 @@ export interface AdminPanelProps {
    * console is ducking against exactly the number every listener was sent.
    */
   mic: MicSnapshot | null
+  /**
+   * Who, besides this console, is on the mic — and who has just been asked up.
+   * Null until the first frame.
+   *
+   * On the socket like the mic beside it, and for the same reason: a guest
+   * brought up from a second tab moves this one too.
+   */
+  floor: FloorSnapshot | null
+  /**
+   * Who has asked for the mic, oldest first.
+   *
+   * The one thing on this panel the room is never sent. A raised hand is a
+   * request addressed to whoever runs the decks, like a wish, and putting the
+   * queue in front of everybody would be a social cost paid by the shyest
+   * person in the room.
+   */
+  hands: Listener[]
   /** The socket, for signalling. Commands still go over HTTP. */
   connection: StationConnection | null
   /** This console's own id, so it never offers itself a microphone. */
@@ -121,6 +140,8 @@ export interface AdminPanelProps {
   applyAir(snapshot: AirSnapshot): void
   applySchedule(next: ScheduledSession | null): void
   applyMic(snapshot: MicSnapshot): void
+  /** Fold in what `POST /api/floor` just answered. See `applyState`. */
+  applyFloor(snapshot: FloorSnapshot): void
 }
 
 /**
@@ -157,6 +178,9 @@ export function AdminPanel({
   applyAir,
   applySchedule,
   applyMic,
+  floor,
+  hands,
+  applyFloor,
 }: AdminPanelProps) {
   const { status: signedIn, api, error: sessionError, signIn, signOut } = session
 
@@ -183,6 +207,8 @@ export function AdminPanel({
       padding={padding}
       messages={messages}
       mic={mic}
+      floor={floor}
+      hands={hands}
       connection={connection}
       me={me}
       deaf={deaf}
@@ -196,6 +222,7 @@ export function AdminPanel({
       applyAir={applyAir}
       applySchedule={applySchedule}
       applyMic={applyMic}
+      applyFloor={applyFloor}
       onSignOut={signOut}
     />
   )
@@ -273,6 +300,8 @@ interface ControlsProps {
   padding: number
   messages: ChatMessage[]
   mic: MicSnapshot | null
+  floor: FloorSnapshot | null
+  hands: Listener[]
   connection: StationConnection | null
   me: number | null
   /**
@@ -292,6 +321,7 @@ interface ControlsProps {
   applyAir(snapshot: AirSnapshot): void
   applySchedule(next: ScheduledSession | null): void
   applyMic(snapshot: MicSnapshot): void
+  applyFloor(snapshot: FloorSnapshot): void
   onSignOut: () => void
 }
 
@@ -305,6 +335,8 @@ function Controls({
   padding,
   messages,
   mic,
+  floor,
+  hands,
   connection,
   me,
   deaf,
@@ -318,6 +350,7 @@ function Controls({
   applyAir,
   applySchedule,
   applyMic,
+  applyFloor,
   onSignOut,
 }: ControlsProps) {
   const [tracks, setTracks] = useState<Track[]>([])
@@ -467,6 +500,36 @@ function Controls({
     [api, micAction],
   )
 
+  /**
+   * Bringing somebody up, and standing them down.
+   *
+   * Through `micAction` rather than `run`, and for its reason rather than its
+   * own: this is the one control on the panel that gets pressed while a record
+   * is ending, and greying out the transport for a round trip because somebody
+   * put their hand up would be the console taking itself away at the worst
+   * moment. Standing a guest down has the sharper version of the same argument.
+   */
+  const floorAction = useCallback(
+    async (act: () => Promise<FloorSnapshot>) => {
+      try {
+        applyFloor(await act())
+      } catch (err) {
+        if (err instanceof AdminError && err.unauthorized) return onSignOut()
+        setError(err instanceof Error ? err.message : 'the floor did not answer')
+      }
+    },
+    [applyFloor, onSignOut],
+  )
+
+  const bringUp = useCallback(
+    (listener: number) => void floorAction(() => api.floor('invite', listener)),
+    [api, floorAction],
+  )
+  const standDown = useCallback(
+    () => void floorAction(() => api.floor('drop')),
+    [api, floorAction],
+  )
+
   const report = (line: string) => setUploads((seen) => [...seen, { id: seen.length, line }])
 
   const upload = useCallback(
@@ -553,6 +616,15 @@ function Controls({
             onClose={closeMic}
             onRenew={renewMic}
             onDuck={setDuck}
+          />
+          {/* Under the mic, because it is the same control surface: who is
+              talking over the music, and whether it is you. */}
+          <FloorCard
+            floor={floor}
+            hands={hands}
+            air={air}
+            onBringUp={bringUp}
+            onStandDown={standDown}
           />
           {/* Last in this column, and deliberately. Everything else on the
               panel drives a broadcast that is happening or is about to; this is
@@ -952,6 +1024,95 @@ function MicCard({
       </label>
 
       <SoundCheck input={input} />
+    </section>
+  )
+}
+
+interface FloorCardProps {
+  floor: FloorSnapshot | null
+  /** Who has asked, oldest first. The room is never sent this. */
+  hands: Listener[]
+  air: AirSnapshot | null
+  onBringUp(listener: number): void
+  onStandDown(): void
+}
+
+/**
+ * Who else gets to talk.
+ *
+ * The list here is the one thing on this panel that nobody else on the station
+ * can see, and that is deliberate rather than incidental: a raised hand is a
+ * request addressed to whoever runs the decks, exactly like a wish, and a queue
+ * the room could see would be a social cost paid by the shyest person in it and
+ * a thing people get nagged about.
+ *
+ * There is no way to put somebody on air who did not ask for it. The station
+ * refuses an id with no hand up, so this card can only ever answer a request —
+ * which is what makes an invitation a reply rather than a summons, and is why
+ * there is no roster to pick from here.
+ *
+ * Standing somebody down is one button whatever state they are in: *never mind*
+ * while an invitation is out, *stand down* once they are up. That is what lets
+ * it be the control reached for in a hurry without first having to work out
+ * which of two things is happening.
+ */
+function FloorCard({ floor, hands, air, onBringUp, onStandDown }: FloorCardProps) {
+  const onAir = air?.live ?? false
+  const speaker = floor?.speaker ?? null
+  const invited = floor?.invited ?? null
+
+  return (
+    <section className="card card--floor" data-testid="floor-card">
+      <header className="card__head">
+        <h2 className="card__title">Callers</h2>
+      </header>
+
+      {!VOICE_CARRIES && (
+        // The same sentence the guest is shown, for the same reason. A card
+        // that let somebody be brought up without saying their voice does not
+        // travel yet would have the console apologising to a room that heard
+        // nothing. Goes, with the constant, when the talk channel arrives.
+        <p className="mic__warn" data-testid="floor-silent">
+          A guest ducks the room and lights the badge. Their voice does not travel yet.
+        </p>
+      )}
+
+      {speaker ? (
+        <div className="floor__up" data-testid="floor-speaker">
+          <span className="floor__who">{speaker.nickname} has the mic</span>
+          <button type="button" className="button" onClick={onStandDown}>
+            Stand down
+          </button>
+        </div>
+      ) : invited ? (
+        <div className="floor__up" data-testid="floor-invited">
+          <span className="floor__who">{invited.nickname} — asked up, waiting</span>
+          <button type="button" className="button" onClick={onStandDown}>
+            Never mind
+          </button>
+        </div>
+      ) : hands.length === 0 ? (
+        <p className="card__empty" data-testid="floor-empty">
+          {onAir ? 'Nobody has asked for the mic.' : 'Off air. Nobody can ask.'}
+        </p>
+      ) : (
+        <ul className="floor__hands" data-testid="floor-hands">
+          {hands.map((listener) => (
+            <li key={listener.id} className="floor__hand">
+              <span className="floor__who">{listener.nickname}</span>
+              <button
+                type="button"
+                className="button"
+                data-testid={`bring-up-${listener.id}`}
+                onClick={() => onBringUp(listener.id)}
+                disabled={!onAir}
+              >
+                Bring up
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </section>
   )
 }

@@ -13,6 +13,7 @@ import { AdminPanel } from './AdminPanel.js'
 import { Lyrics } from './Lyrics.js'
 import { Sidebar } from './Sidebar.js'
 import { Topbar } from './Topbar.js'
+import { VOICE_CARRIES, handRefusal, secondsLeft } from './lib/hand.js'
 import { Deck, Mute, OnAir, Waveform } from './Turntable.js'
 import { type AdminSession, useAdminSession } from './hooks/useAdminSession.js'
 import { useNarrow } from './hooks/useNarrow.js'
@@ -281,6 +282,9 @@ function Station({ route: requested, session }: { route: Route; session: AdminSe
     applySchedule,
     mic,
     applyMic,
+    floor,
+    hands,
+    applyFloor,
     me,
     decks,
   } = useStation(
@@ -538,12 +542,35 @@ function Station({ route: requested, session }: { route: Route; session: AdminSe
   // once it leads somewhere, and until then every view is the one you land on.
   const route: Route = needsJoin(requested) && !joined ? 'on-air' : requested
 
+  // Which of the three things this page is to the floor: nobody, the one being
+  // asked up, or the one talking. Read off a broadcast rather than from a frame
+  // addressed here, which is why the id has to be known first.
+  const invited = me !== null && floor?.invited?.id === me
+  const speaking = me !== null && floor?.speaker?.id === me
+
   const wishes = (
     <Wishes
       wishes={myWishes}
       connection={connection}
       live={status === 'connected'}
       refusal={refusalAbout(socketError, 'wish')}
+      clearRefusal={clearSocketError}
+    />
+  )
+  // Beside the wishes, because it is the same kind of act: a private request to
+  // whoever runs the decks, which they read and decide on. Not on the deck
+  // itself — being asked up is what has to be unmissable, and that has its own
+  // banner above every route.
+  const hand = (
+    <Hand
+      connection={connection}
+      live={status === 'connected' && joined && (air?.live ?? false)}
+      me={me}
+      onAir={air?.live ?? false}
+      invited={invited}
+      speaking={speaking}
+      speaker={floor?.speaker ?? null}
+      refusal={refusalAbout(socketError, 'hand')}
       clearRefusal={clearSocketError}
     />
   )
@@ -599,6 +626,21 @@ function Station({ route: requested, session }: { route: Route; session: AdminSe
             for the listener page. */}
         {!admin && joined && !stranded && <StaleNotice state={here} />}
 
+        {/* Above everything, and at every width, for the reason the notice
+            above it is: being asked up is time-limited and being *on air* is
+            the one thing on this page somebody must never have to go looking
+            for. A banner in a panel behind a route is a microphone somebody
+            forgot was open. */}
+        {!admin && joined && (invited || speaking) && (
+          <Called
+            connection={connection}
+            invited={invited}
+            speaking={speaking}
+            expiresAt={floor?.invited?.expiresAt ?? null}
+            serverNow={clock.serverNow}
+          />
+        )}
+
         {/* The two sides of the station, and never both at once: the console
             takes the whole page, because whoever is running the decks is
             working, not listening. The chip in the top bar is the way back. */}
@@ -618,6 +660,9 @@ function Station({ route: requested, session }: { route: Route; session: AdminSe
             applyState={applyState}
             applyQueue={applyQueue}
             applyPadding={applyPadding}
+            floor={floor}
+            hands={hands}
+            applyFloor={applyFloor}
             applyAir={applyAir}
             schedule={schedule}
             applySchedule={applySchedule}
@@ -706,6 +751,10 @@ function Station({ route: requested, session }: { route: Route; session: AdminSe
                     // Only while there is sound to talk over. A break announced
                     // under a paused deck would be a badge about nothing.
                     talking={Boolean(onAir && mic?.live)}
+                    // Whose voice it is, when it is not the decks'. The badge
+                    // already answers "what is this sound"; during a call-in
+                    // the honest answer has a name in it.
+                    speaker={floor?.speaker?.nickname ?? null}
                   />
 
                   {/* No clock under the title. A listener is not seeking and
@@ -752,6 +801,10 @@ function Station({ route: requested, session }: { route: Route; session: AdminSe
                   Who else is here stays: that is not somewhere you go, it is
                   something about the room you are already in. */}
               {!narrow && <Listeners listeners={listeners} padding={padding} />}
+              {/* On the desk, under the room. Asking to speak is about the room
+                  you are in rather than about the record, which is why it sits
+                  here and not beside the deck. */}
+              {!narrow && hand}
             </section>
 
             {!narrow && (
@@ -784,7 +837,12 @@ function Station({ route: requested, session }: { route: Route; session: AdminSe
                 {chat}
               </>
             )}
-            {route === 'wishes' && wishes}
+            {route === 'wishes' && (
+              <>
+                {wishes}
+                {hand}
+              </>
+            )}
             {route === 'history' && (
               <Earlier plays={history} currentTrackId={track?.id ?? null} standalone />
             )}
@@ -1127,6 +1185,233 @@ function Wishes({
         </button>
       </form>
     </section>
+  )
+}
+
+interface HandProps {
+  connection: StationConnection | null
+  /** Socket up, tuned in, and a broadcast to ask to be part of. */
+  live: boolean
+  /**
+   * This socket's id, and the reason this component holds state at all.
+   *
+   * A new socket is a new row in the roster, so a hand raised on the old one is
+   * gone at the station and this page would otherwise go on showing it up.
+   */
+  me: number | null
+  /** Whether there is a broadcast. A session ending empties the floor. */
+  onAir: boolean
+  invited: boolean
+  speaking: boolean
+  /** Whoever has the mic, which may be somebody else. */
+  speaker: Listener | null
+  refusal: SocketRefusal | null
+  clearRefusal(): void
+}
+
+/**
+ * Asking to say something.
+ *
+ * Beside the wishes because it is the same kind of act — a private request to
+ * whoever runs the decks, which they read and decide on — and it makes the same
+ * promise, which is none.
+ *
+ * The one thing that reads as odd here is that the page tracks its own raised
+ * hand instead of being told. That is not an oversight: the station sends the
+ * list of hands to the console and to nobody else, because a queue the room can
+ * see is a social cost paid by the shyest person in it. The cost of that
+ * decision is exactly this — a page cannot read its own hand off a broadcast,
+ * so it remembers, and forgets again the moment anything could have made it
+ * stale.
+ */
+function Hand({
+  connection,
+  live,
+  me,
+  onAir,
+  invited,
+  speaking,
+  speaker,
+  refusal,
+  clearRefusal,
+}: HandProps) {
+  const [raised, setRaised] = useState(false)
+  // What it was before the press that has not been answered, so a refusal can
+  // hand it back. The same shape the composers use for a draft they lost.
+  const unanswered = useRef<boolean | null>(null)
+
+  // Every way a hand can go down without this page being the one to lower it.
+  // A reconnect is a new row in the roster; a session ending clears the floor
+  // outright; and being asked up consumes the hand it answers.
+  useEffect(() => setRaised(false), [me, onAir])
+  useEffect(() => {
+    if (invited || speaking) setRaised(false)
+  }, [invited, speaking])
+
+  // Put back what the press assumed. The button moves on the press rather than
+  // on the round trip — a control that waited would feel broken on a station
+  // where everything else does not — and the cost of that is this: a hand the
+  // station refused, for pace or for a mute, must not go on showing as up.
+  const seq = refusal?.seq
+  useEffect(() => {
+    if (seq === undefined) return
+    const before = unanswered.current
+    unanswered.current = null
+    if (before !== null) setRaised(before)
+  }, [seq])
+
+  function ask(action: 'raise' | 'lower') {
+    if (!connection || !live) return
+    // Only when this control has a notice up. The station keeps one refusal at
+    // a time for the whole socket, and clearing it from here would take down
+    // the chat's "not sent" because somebody put their hand up.
+    if (refusal) clearRefusal()
+    unanswered.current = raised
+    setRaised(action === 'raise')
+    connection.send({ type: 'hand', action })
+  }
+
+  const refusalNotice = refusal ? handRefusal(refusal.error.code) : null
+  // Said whoever is up, including this listener: the badge on the deck says the
+  // same thing, and a panel that went blank while somebody was talking would
+  // look like it had stopped working.
+  const whoIsUp = speaker ? `${speaker.nickname} has the mic.` : null
+
+  return (
+    <section className="panel panel--stage" id="hand" data-testid="hand">
+      <div className="panel__head">
+        <h2 className="panel__title">The mic</h2>
+        <p className="panel__aside">no promises</p>
+      </div>
+
+      {speaking || invited ? (
+        // Deliberately passive. Both of these have a banner above every view,
+        // and two places to accept or come down is two places to disagree with
+        // each other — with a live microphone as the thing they disagree about.
+        <p className="panel__empty" data-testid="hand-elsewhere">
+          {speaking
+            ? "You're up. The notice at the top is where you come down."
+            : 'The decks have asked you up. The notice at the top is where you answer.'}
+        </p>
+      ) : (
+        <>
+          <p className="panel__empty">
+            {whoIsUp ??
+              (raised
+                ? 'Your hand is up. Whoever runs the decks decides, and may not.'
+                : 'Ask to say something on air. No promises.')}
+          </p>
+          <button
+            type="button"
+            className="button"
+            data-testid="hand-toggle"
+            onClick={() => ask(raised ? 'lower' : 'raise')}
+            disabled={!live}
+          >
+            {raised ? 'Never mind' : 'Ask for the mic'}
+          </button>
+        </>
+      )}
+
+      {refusalNotice && (
+        <p className="refusal" role="status" data-testid="hand-refusal">
+          {refusalNotice}
+        </p>
+      )}
+    </section>
+  )
+}
+
+interface CalledProps {
+  connection: StationConnection | null
+  invited: boolean
+  speaking: boolean
+  /** Station epoch ms the invitation lapses at, or null when there is none. */
+  expiresAt: number | null
+  /**
+   * The station's clock.
+   *
+   * `expiresAt` is a point on it, so subtracting this browser's `Date.now()`
+   * would put the countdown wherever the two machines happen to disagree — and
+   * on a page whose clock is a minute out, would offer a button that had
+   * already stopped working, or take one away that had not.
+   */
+  serverNow(): number
+}
+
+/**
+ * Being asked up, and being up.
+ *
+ * Above every view at every width, which is the whole point of it. An
+ * invitation is time-limited and an open microphone is the one thing on this
+ * page somebody must never have to go looking for: a notice tucked inside a
+ * panel behind a route is a microphone somebody forgot was open.
+ *
+ * The countdown reads the station's own `expiresAt` rather than counting sixty
+ * of its own seconds, so the number on screen and the moment the offer actually
+ * lapses are the same moment.
+ */
+function Called({ connection, invited, speaking, expiresAt, serverNow }: CalledProps) {
+  const [now, setNow] = useState(() => serverNow())
+
+  // Only while there is something counting down. A timer left running behind an
+  // open microphone would be a render a second for the rest of the call.
+  useEffect(() => {
+    if (expiresAt === null) return
+    setNow(serverNow())
+    const tick = window.setInterval(() => setNow(serverNow()), 500)
+    return () => window.clearInterval(tick)
+  }, [expiresAt, serverNow])
+
+  const send = (action: 'accept' | 'lower') => connection?.send({ type: 'hand', action })
+  const left = expiresAt === null ? 0 : secondsLeft(expiresAt, now)
+
+  if (speaking) {
+    return (
+      <div className="outage called called--up" data-testid="on-the-mic" role="status">
+        <p className="outage__headline">You're on the mic.</p>
+        <p className="outage__detail">
+          {VOICE_CARRIES
+            ? 'The room can hear you. The music has come down for it.'
+            : 'The music has come down for you across the room — but your voice does not travel yet, so nobody can hear you.'}
+        </p>
+        <button type="button" className="button" data-testid="come-down" onClick={() => send('lower')}>
+          Come down
+        </button>
+      </div>
+    )
+  }
+
+  if (!invited) return null
+
+  return (
+    <div className="outage called" data-testid="called-up" role="status">
+      <p className="outage__headline">The decks have asked you up.</p>
+      <p className="outage__detail">
+        {left > 0
+          ? `The offer is open for another ${left} second${left === 1 ? '' : 's'}.`
+          : 'The offer has run out.'}
+      </p>
+      <div className="called__actions">
+        <button
+          type="button"
+          className="button"
+          data-testid="go-up"
+          onClick={() => send('accept')}
+          disabled={left === 0}
+        >
+          Go up
+        </button>
+        <button
+          type="button"
+          className="button button--quiet"
+          data-testid="not-now"
+          onClick={() => send('lower')}
+        >
+          Not now
+        </button>
+      </div>
+    </div>
   )
 }
 

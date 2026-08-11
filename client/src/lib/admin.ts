@@ -1,5 +1,6 @@
 import type {
   AirSnapshot,
+  FloorSnapshot,
   MicSnapshot,
   PlaybackSnapshot,
   QueueEntry,
@@ -340,6 +341,23 @@ export class AdminApi {
    */
   duck(duckTo: number): Promise<MicSnapshot> {
     return this.#json<MicSnapshot>('POST', '/api/mic', { action: 'duck', duckTo })
+  }
+
+  /**
+   * Bringing a listener up, and taking the mic back.
+   *
+   * Only two verbs, and there is deliberately no third for putting somebody on
+   * air who did not ask: the station refuses an id with no hand raised, which
+   * is what makes an invitation a reply rather than a summons.
+   *
+   * The other half of this conversation — the hand going up, the invitation
+   * being accepted or declined — travels the other way on the socket, because
+   * a listener has nothing to authenticate with. See `HandMessage`.
+   */
+  floor(action: 'invite', listener: number): Promise<FloorSnapshot>
+  floor(action: 'drop'): Promise<FloorSnapshot>
+  floor(action: 'invite' | 'drop', listener?: number): Promise<FloorSnapshot> {
+    return this.#json<FloorSnapshot>('POST', '/api/floor', { action, listener })
   }
 
   async queue(): Promise<QueueEntry[]> {
