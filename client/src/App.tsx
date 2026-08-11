@@ -656,7 +656,7 @@ function Station({ route: requested, session }: { route: Route; session: AdminSe
             guest={guest}
             invited={invited}
             speaking={speaking}
-            heard={voice.talking === 'connected'}
+            talking={voice.talking}
             expiresAt={floor?.invited?.expiresAt ?? null}
             serverNow={clock.serverNow}
           />

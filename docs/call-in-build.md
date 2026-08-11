@@ -885,7 +885,46 @@ and can be cut in the time it takes to press one key.
 
 ---
 
-## C6 — survive contact
+## C6 — survive contact — **built**
+
+Shipped, and most of the list was already true — the floor has been pinned to a
+socket since C1, which is what a lot of these rows turn out to be. What was
+missing was in two places.
+
+**The talk channel had no retry.** The room's connections have had a bounded
+ladder since M4 and a guest's did not, which matters more rather than less: a
+listener who cannot be reached misses a mic break, while a guest who cannot be
+reached is *on air*, in front of a room that has ducked for them, saying things
+nobody can hear. It has its own counter rather than a row in the room's, because
+it counts a different thing — a caller whose downlink was rebuilt twice has used
+none of the patience owed to their uplink — and the end of the ladder is a word
+on the console rather than silence, because the decision to stand somebody down
+belongs to the person who can see it.
+
+**A call could end without the caller being told.** The decks stand them down,
+the broadcast finishes, or their own socket drops and comes back as a new
+listener — the capability was granted to a socket, and a reconnect is a
+different one. All three look identical from the caller's side, which is a
+banner disappearing mid-sentence. There is now a plain "you're off the mic" for
+eight seconds, and it sits *behind* a fresh invitation rather than in front of
+one, because somebody stood down and asked back up inside the same few seconds
+is exactly what a failed connection and a second attempt look like.
+
+The same honesty applies while they are up: what the page says now depends on
+the actual state of their uplink, so a caller whose voice is not getting through
+is told so rather than being left with an optimistic *on its way*. They cannot
+fix it and should not keep talking into it.
+
+One bug, and it was mine twice over: the "you're off the mic" notice was keyed
+on the state rather than on the change, so on first render it told every
+listener in the room that a turn they had never had was over.
+
+**Verified:** `qa:callin` grown to 33 checks across three browsers, including
+the two rows that can be produced on demand — somebody arriving mid-call
+hearing the guest *and* arriving already ducked for them, and a caller whose tab
+dies being stood down with the console and the room both going quiet. Plus a
+server test for the row that cannot be produced in a browser: the console dying,
+its lease lapsing, and the floor going with the mic.
 
 Every row of the failure table in [call-in.md](./call-in.md), made true.
 
@@ -912,9 +951,13 @@ Every row of the failure table in [call-in.md](./call-in.md), made true.
 
 ### Tests
 
-`server/test/floor.test.ts` covers the state transitions; the reconnect and
+`server/test/floor.test.ts` covers the state transitions and
+`floor-routes.test.ts` the two that are wiring — the mic shutting for any
+reason, including a lapsed lease, taking the floor with it. The reconnect and
 teardown paths live in hooks, and this codebase tests the wire underneath hooks
-rather than the hooks themselves. `npm run qa:callin` covers the whole path.
+rather than the hooks themselves, so the rest is `npm run qa:callin`: three
+browsers, a call placed, cut, placed again, walked in on, and finally killed by
+closing the caller's tab.
 
 ---
 
@@ -941,12 +984,35 @@ for building it this way.
 | C3 | The guest's sound check | Low | **built** — ~900 lines with tests | **Yes** |
 | C4 | The talk channel, cue only | **High** | **built** — ~700 lines with tests | **Yes** — audition |
 | C5 | Mix-minus, on air, the cut | Medium | **built** — ~400 lines with tests | — |
-| C6 | Survive contact | Medium | ~150 lines | — |
+| C6 | Survive contact | Medium | **built** — ~350 lines with tests | — |
 
-C1, C3 and C4 are each worth shipping on their own, and that is not a
-consolation prize: if C4 goes badly you still have a station where somebody can
-raise a hand, be brought up, duck the room and be heard by you in your
-headphones. Nothing built before it is wasted.
+All six are built.
 
-The one to be careful with is C5, because it is short, it looks trivial, and the
-bug it can introduce is silent on every screen you can see.
+C1, C3 and C4 were each worth shipping on their own, and that was not a
+consolation prize: after C4 there was a station where somebody could raise a
+hand, be brought up, duck the room and be heard by whoever runs the decks in
+their headphones. Nothing built before it was wasted.
+
+C5 was the one to be careful with — short, apparently trivial, and the bug it
+can introduce is silent on every screen you can see. It went in cleanly, and the
+reason is worth keeping: the ordering lives inside the effect that owns the
+talk channel, so the swap happens when the connection is *built* and cannot
+race the audio that arrives on it later.
+
+## What this cost, in the end
+
+| | Planned | Built |
+|---|---|---|
+| C1 | ~400 lines | ~1,000 with tests |
+| C2 | ~200 lines | ~700 with tests |
+| C3 | ~250 lines | ~900 with tests |
+| C4 | ~250 lines | ~700 with tests |
+| C5 | ~150 lines | ~400 with tests |
+| C6 | ~150 lines | ~350 with tests |
+
+The estimates were for the code and the tests are most of the rest, which is the
+ordinary shape of it here. What the estimates missed entirely was the browser
+work: four of the six bugs found in this feature were invisible to every unit
+test and to every screen except one, and all four were caught by measuring
+audio at both ends of a real call. `qa:callin` is 33 checks, and it earned every
+one of them.

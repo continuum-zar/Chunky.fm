@@ -469,9 +469,81 @@ async function onHeadphones(): Promise<void> {
   }
 }
 
+/**
+ * What happens when a call ends by itself.
+ *
+ * The rows of the failure table that can be produced on demand: a caller whose
+ * tab dies mid-sentence, and a listener who walks in while somebody else is
+ * already talking. Both are ordinary — a phone locking, somebody arriving at
+ * ten — and both are invisible from the console unless they are made to work.
+ */
+async function survivesContact(): Promise<void> {
+  console.log('\nwhen a call ends by itself…')
+  const browser = await browserWith(headphonesWav())
+  try {
+    const guest = await browser.newPage()
+    await guest.goto(STATION_URL)
+    await tuneIn(guest, 'ama')
+    await wait(1_500)
+    const console_ = await decks(browser, true)
+    await askedUp(guest, console_)
+    await guest.click('[data-testid=sound-check]')
+    const { passed } = await verdict(guest)
+    if (!passed) {
+      checks.run('a caller gets up at all', false, 'the sound check never passed')
+      return
+    }
+    await guest.click('[data-testid=go-up]')
+    await wait(2_500)
+
+    // Somebody walking in at ten, while a call is already happening.
+    const latecomer = await browser.newPage()
+    await latecomer.addInitScript(INSTRUMENT_DUCKS)
+    await latecomer.addInitScript(INSTRUMENT_VOICE)
+    await latecomer.goto(STATION_URL)
+    await tuneIn(latecomer, 'thabo')
+
+    let late = 0
+    for (let i = 0; i < 30 && late < HEARD; i++) {
+      late = (await latecomer.evaluate(VOICE_LEVEL)) as number
+      if (late < HEARD) await wait(500)
+    }
+    checks.run('somebody arriving mid-call hears the guest', late >= HEARD, `peak ${late.toFixed(4)}`)
+    // And arrives already ducked, rather than putting a bar of full-volume
+    // music under somebody's voice and correcting it a frame later.
+    const ducks = (await latecomer.evaluate(DUCKS)) as Duck[]
+    checks.run(
+      'and arrives already ducked for them',
+      ducks.some((duck) => duck.target > 0 && duck.target < 1),
+      `first ramp ${ducks[0]?.target}`,
+    )
+
+    // The caller's phone locks, or their tab is closed. Everything the floor
+    // holds is pinned to a socket, which is why there is no lease on it.
+    await guest.close()
+    await wait(2_000)
+    checks.run(
+      'a caller whose tab dies is stood down',
+      (await console_.locator('[data-testid=floor-speaker]').count()) === 0,
+      'the floor is empty',
+    )
+    const after = (await console_.evaluate(CUE_LEVEL)) as number
+    checks.run('and the console stops hearing them', after < HEARD, `peak ${after.toFixed(4)}`)
+    let stillThere = 0
+    for (let i = 0; i < 6; i++) {
+      stillThere = Math.max(stillThere, (await latecomer.evaluate(VOICE_LEVEL)) as number)
+      await wait(400)
+    }
+    checks.run('and so does the room', stillThere < HEARD, `peak ${stillThere.toFixed(4)}`)
+  } finally {
+    await browser.close()
+  }
+}
+
 async function main(): Promise<void> {
   await onSpeakers()
   await onHeadphones()
+  await survivesContact()
   checks.finish('CALL-IN QA')
 }
 

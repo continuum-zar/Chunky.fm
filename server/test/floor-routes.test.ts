@@ -183,6 +183,27 @@ describe('POST /api/floor', () => {
       expect(harness.floor.snapshot().speaker).toBeNull()
     })
 
+    it('takes the guest down when the console dies mid-call', async () => {
+      harness.floor.raise(7, 'sipho')
+      harness.floor.invite(7)
+      harness.floor.accept(7)
+      expect(harness.mic.live).toBe(true)
+
+      // What a console whose tab was closed looks like from here: its socket
+      // goes, which shortens the lease rather than ending it — a console that
+      // is merely reconnecting keeps its mic — and then nothing renews it.
+      harness.mic.hurry(0)
+      harness.mic.sweep()
+
+      // The floor goes with the mic, and this is the row of the failure table
+      // it is really for. A guest still shown as up in a room that has stopped
+      // ducking is somebody talking under music at full volume — and their
+      // voice was travelling through that console anyway, so it stopped when
+      // the console did whether the station admits it or not.
+      expect(harness.mic.live).toBe(false)
+      expect(harness.floor.snapshot().speaker).toBeNull()
+    })
+
     it('clears everything when the broadcast ends', async () => {
       harness.floor.raise(3, 'ama')
       harness.floor.raise(7, 'sipho')

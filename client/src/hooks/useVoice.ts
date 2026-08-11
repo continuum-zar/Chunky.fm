@@ -174,6 +174,19 @@ export function useVoiceBroadcast({
    */
   const talk = useRef<{ id: number; link: PeerLink } | null>(null)
   const [guest, setGuest] = useState<PeerHealth | null>(null)
+  /**
+   * How many times this call's microphone has been rebuilt, and whether one is
+   * waiting out its delay.
+   *
+   * Its own counter rather than a row in `attempts`, because it counts a
+   * different thing: that map is about reaching a listener, and this is about
+   * hearing one. A guest whose downlink was rebuilt twice has used none of the
+   * patience owed to their uplink, and reading one number for both would give
+   * up on a call for a reason that had nothing to do with it.
+   */
+  const talkAttempts = useRef(0)
+  const talkRetrying = useRef(false)
+  const [talkTick, setTalkTick] = useState(0)
   // Read through a ref so the effect below is not rebuilt — and the guest's
   // connection not torn down — every time the console re-renders.
   const guestStream = useRef(onGuest)
@@ -238,6 +251,40 @@ export function useVoiceBroadcast({
     },
     [note],
   )
+
+  /**
+   * Build the guest's microphone again, a bounded number of times.
+   *
+   * The same ladder the room's connections climb, and for the same reason: ICE
+   * fails both for things that pass — a network changing under a laptop, a
+   * relay briefly out — and for things that do not, and two attempts tells them
+   * apart without either giving up on a flake or hammering somebody who was
+   * never reachable.
+   *
+   * What is different is what a failure *means* here. A listener who cannot be
+   * reached misses a mic break. A guest who cannot be reached is on air, in
+   * front of a room that has ducked for them, saying things nobody can hear —
+   * so the end of this ladder is not silence but a word on the console, and the
+   * decision to stand them down stays with the person who can see it.
+   */
+  const retryTalk = useCallback((id: number) => {
+    if (talkRetrying.current) return
+    if (talkAttempts.current >= MAX_VOICE_ATTEMPTS) {
+      setGuest('unreachable')
+      return
+    }
+    talkAttempts.current += 1
+    talkRetrying.current = true
+    setGuest('retrying')
+    window.setTimeout(() => {
+      talkRetrying.current = false
+      const open = talk.current
+      if (open?.id !== id) return
+      open.link.close()
+      talk.current = null
+      setTalkTick((tick) => tick + 1)
+    }, RETRY_DELAY_MS)
+  }, [])
 
   // Deliberately not `targets` itself: a new array every render would tear down
   // every connection on every render. What matters is which ids are in it.
@@ -319,6 +366,12 @@ export function useVoiceBroadcast({
     const open = talk.current
     const wanted = connection && iceServers !== null && speaker !== null && speaker !== me
 
+    // A different caller, or none, is a clean slate: whatever could not be
+    // reached ten minutes ago has no bearing on whoever is up now.
+    if (!wanted || open?.id !== speaker) {
+      if (talkAttempts.current !== 0 && open?.id !== speaker) talkAttempts.current = 0
+    }
+
     if (open && (!wanted || open.id !== speaker)) {
       // Coming down, and the order is the reverse of going up for the same
       // reason. Off the air first, so nothing of theirs is still reaching the
@@ -332,7 +385,9 @@ export function useVoiceBroadcast({
       guestStream.current(null)
       links.current.get(open.id)?.replace(buses.current.track)
     }
-    if (!wanted || talk.current) return
+    // A rebuild waiting out its delay is deliberately not built here: it has no
+    // link, and making one now would skip the wait.
+    if (!wanted || talk.current || talkRetrying.current) return
 
     const id = speaker as number
     // **Before anything of theirs can reach the room.** This is the whole
@@ -365,10 +420,11 @@ export function useVoiceBroadcast({
             fader.current(0)
             guestStream.current(null)
           }
+          if (state === 'failed') retryTalk(id)
         },
       }),
     }
-  }, [connection, iceServers, speaker, me])
+  }, [connection, iceServers, speaker, me, talkTick, retryTalk])
 
   // Leaving the console takes the guest's connection with it, as it does the
   // room's. Its own effect because it must not run on a speaker changing.
