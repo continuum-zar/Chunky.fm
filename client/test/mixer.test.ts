@@ -17,7 +17,7 @@
  * torn down and rebuilt, which is what changing input device does.
  */
 import { beforeEach, describe, expect, it } from 'vitest'
-import { airMixer } from '../src/lib/mixer.js'
+import { airMixer, guestBus } from '../src/lib/mixer.js'
 
 type Call = [string, ...number[]]
 
@@ -307,6 +307,45 @@ describe('the faders', () => {
     mixer.hear(stream())
 
     expect(faderTo(room!)!.gain.value).toBe(0)
+  })
+})
+
+describe('a guest\'s end', () => {
+  const bus = () => guestBus(context as unknown as AudioContext)
+
+  it('is one bus and nothing to mix', () => {
+    const guest = bus()
+
+    // No second destination, because there is nobody to send a different mix
+    // to; no cue, because a guest is not auditioning anybody; no air fader,
+    // because whether the room hears them is taken at the console's end.
+    expect(context.destinations).toHaveLength(1)
+    expect(guest.track).not.toBeNull()
+  })
+
+  it('carries whatever is plugged into it', () => {
+    const guest = bus()
+    expect(reaches(guest.talkIn as unknown as FakeNode, context.destinations[0]!)).toBe(true)
+  })
+
+  it('falls back to silence on a browser without stream destinations', () => {
+    context.refuseDestination = true
+    const guest = bus()
+
+    expect(guest.track).toBeNull()
+    expect(guest.context).toBeNull()
+  })
+
+  it('stops the track and the context on the way out', () => {
+    const guest = bus()
+    const [only] = context.destinations
+
+    guest.close()
+
+    // A caller who came down and left a live capture behind would be a browser
+    // showing a recording light for a call that ended.
+    expect(only!.track.stopped).toBe(1)
+    expect(context.closed).toBe(1)
   })
 })
 

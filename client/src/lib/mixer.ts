@@ -45,26 +45,87 @@ const RAMP_S = 0.015
  */
 const CUT_S = 0.005
 
-export interface AirMixer {
+/**
+ * Somewhere a microphone can be plugged in.
+ *
+ * The little that `useMicInput` needs to know about what is downstream of it,
+ * and the reason the same rig serves both ends of a call: the console plugs
+ * into two buses and a guest plugs into one, and neither of them is the
+ * microphone's business.
+ */
+export interface OutputBus {
   /**
-   * The graph everything on the console hangs off, or null on a browser that
-   * could not give one.
+   * The graph everything hangs off, or null on a browser that could not give
+   * one.
    *
    * Exposed because the microphone rig builds its analyser and its faders in
-   * the same context as the buses they feed — nodes from two contexts cannot be
+   * the same context as the bus they feed — nodes from two contexts cannot be
    * connected — and reaching through a node to find it would be a worse way of
    * saying the same thing.
    */
   readonly context: AudioContext | null
   /**
-   * Where whoever runs the decks plugs in.
+   * Where the microphone plugs in.
    *
-   * A node rather than a track, because the microphone rig upstream owns its
-   * own ramping — the talk button is a gain in `useMicInput`, and it has to
-   * stay there so that the meter goes on reading a capture that is running
-   * whether or not the room can hear it.
+   * A node rather than a track, because the rig upstream owns its own ramping —
+   * the talk button is a gain in `useMicInput`, and it has to stay there so
+   * that the meter goes on reading a capture that is running whether or not
+   * anybody can hear it.
    */
   readonly talkIn: AudioNode
+  /** Nudge a suspended context awake. Cheap, and safe to call again. */
+  resume(): void
+  close(): void
+}
+
+/**
+ * A guest's end: one bus, and nothing to mix.
+ *
+ * The whole of a caller's outbound side. There is no second destination because
+ * there is nobody to send a different mix to, no cue because a guest is not
+ * auditioning anybody, and no air fader because whether the room hears them is
+ * the console's decision and is taken at the console's end.
+ *
+ * Its own object rather than an `airMixer` with the unused half ignored: the
+ * two are the same shape and not the same thing, and a guest holding a mixer
+ * with a `cut()` on it would be a guest holding a control that does nothing.
+ */
+export interface GuestBus extends OutputBus {
+  /** What the console is sent, once there is a bus to send. */
+  readonly track: MediaStreamTrack | null
+}
+
+export function guestBus(context: AudioContext): GuestBus {
+  let talkIn: GainNode
+  let bus: MediaStreamAudioDestinationNode
+  try {
+    talkIn = context.createGain()
+    bus = context.createMediaStreamDestination()
+    talkIn.connect(bus)
+  } catch {
+    return { ...DEAF, track: null }
+  }
+
+  const resume = () => {
+    if (context.state === 'suspended') void context.resume().catch(() => undefined)
+  }
+
+  return {
+    context,
+    talkIn,
+    get track() {
+      return bus.stream.getAudioTracks()[0] ?? null
+    },
+    resume,
+    close() {
+      talkIn.disconnect()
+      for (const track of bus.stream.getAudioTracks()) track.stop()
+      void context.close().catch(() => undefined)
+    },
+  }
+}
+
+export interface AirMixer extends OutputBus {
   /** What every listener is sent. Exists from the moment the mixer does. */
   readonly roomTrack: MediaStreamTrack | null
   /** What the guest is sent: the room bus, minus the guest. */
@@ -92,12 +153,9 @@ export interface AirMixer {
    * whole of what is available.
    */
   cut(): void
-  /** Nudge a suspended context awake. Cheap, and safe to call again. */
-  resume(): void
-  close(): void
 }
 
-/** A mixer on a browser with no Web Audio: everything, audibly, nothing. */
+/** A bus on a browser with no Web Audio: everything, audibly, nothing. */
 const DEAF: AirMixer = {
   context: null,
   talkIn: { connect: () => undefined, disconnect: () => undefined } as unknown as AudioNode,

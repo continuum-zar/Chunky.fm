@@ -9,7 +9,7 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import { AdminApi } from '../src/lib/admin.js'
-import { handRefusal, secondsLeft } from '../src/lib/hand.js'
+import { deafened, handRefusal, secondsLeft } from '../src/lib/hand.js'
 import type { SocketErrorCode } from '../src/lib/protocol.js'
 
 describe('handRefusal', () => {
@@ -53,6 +53,35 @@ describe('secondsLeft', () => {
     // a page whose clock is a minute out still counts the station's minute.
     const expiresAt = 1_700_000_060_000
     expect(secondsLeft(expiresAt, 1_700_000_000_000)).toBe(60)
+  })
+})
+
+describe('deafened', () => {
+  const mic = (live: boolean, duckTo = 0.2) => ({ live, duckTo })
+
+  it('leaves the music alone when nothing is happening', () => {
+    expect(deafened(false, mic(false))).toBe(1)
+    expect(deafened(false, null)).toBe(1)
+  })
+
+  it('follows the station down for an ordinary mic break', () => {
+    expect(deafened(false, mic(true, 0.2))).toBe(0.2)
+  })
+
+  it('takes a caller\'s own music away entirely', () => {
+    // The strongest move available to a call-in, and the reason it is silence
+    // rather than the duck depth: there is then no music coming out of their
+    // speakers for their own microphone to pick up. It is also what being a
+    // caller on real radio sounds like.
+    expect(deafened(true, mic(true, 0.2))).toBe(0)
+  })
+
+  it('does so even before the station has ducked for them', () => {
+    // The two arrive on different frames — the floor says who is up, the mic
+    // says the room has ducked — and a caller hearing a bar of full-volume
+    // music into an open microphone is the gap between them.
+    expect(deafened(true, mic(false))).toBe(0)
+    expect(deafened(true, null)).toBe(0)
   })
 })
 

@@ -1,5 +1,5 @@
 import { type RefObject, useCallback, useEffect, useRef, useState } from 'react'
-import type { AirMixerHandle } from './useAirMixer.js'
+import type { OutputBus } from '../lib/mixer.js'
 import {
   type InputDevice,
   clippedIn,
@@ -85,7 +85,16 @@ export interface MicInput {
   choose(deviceId: string | null): void
   setOnSpeakers(onSpeakers: boolean): void
   setMonitoring(monitoring: boolean): void
-  /** Whether the room is being sent anything. Ramped; see `talk`. */
+  /**
+   * Whether the room is being sent anything.
+   *
+   * On the console this is the talk button, held down and released. For a guest
+   * it is a latch: whoever runs the decks chose to be there and will reach for
+   * a key, while a guest fumbling a held key while trying to talk is worse than
+   * a guest who forgets to unmute.
+   */
+  talking: boolean
+  /** Open or close what goes out. Ramped; see `talk`. */
   setTalking(talking: boolean): void
 }
 
@@ -121,7 +130,32 @@ function teardown(rig: Rig): void {
   rig.analyser.disconnect()
 }
 
-export function useMicInput(mixer: AirMixerHandle): MicInput {
+export interface MicInputOptions {
+  /**
+   * Whether to assume a speaker in the room to begin with.
+   *
+   * False on the console, where whoever runs the decks read a warning and chose
+   * their own machine, and echo cancellation only costs voice quality. True for
+   * a guest, who is whoever put their hand up on whatever they were holding: it
+   * mangles anything musical, and a guest is not sending music.
+   */
+  onSpeakers?: boolean
+  /**
+   * Every frame's raw level, and how long since the last one.
+   *
+   * Raw rather than the smoothed number the meter draws: the needle falls
+   * slowly on purpose, and a decision made on it would still be reading a room
+   * that had already gone quiet. Called from inside the animation loop, so it
+   * must not render — the sound check keeps its state in a ref and only tells
+   * React when the *stage* moves.
+   */
+  onLevel?(level: number, sinceMs: number): void
+}
+
+export function useMicInput(
+  bus: { ensure(): OutputBus | null },
+  { onSpeakers: startOnSpeakers = false, onLevel }: MicInputOptions = {},
+): MicInput {
   const [wanted, setWanted] = useState(false)
   /**
    * Bumped on every ask, and in the effect's dependencies.
@@ -135,7 +169,7 @@ export function useMicInput(mixer: AirMixerHandle): MicInput {
   const [error, setError] = useState<string | null>(null)
   const [devices, setDevices] = useState<InputDevice[]>([])
   const [deviceId, setDeviceId] = useState<string | null>(null)
-  const [onSpeakers, setOnSpeakers] = useState(false)
+  const [onSpeakers, setOnSpeakers] = useState(startOnSpeakers)
   const [monitoring, setMonitoring] = useState(false)
   const [talking, setTalking] = useState(false)
 
@@ -145,10 +179,13 @@ export function useMicInput(mixer: AirMixerHandle): MicInput {
   // monitoring on and off never has to rebuild the graph.
   const monitoringRef = useRef(monitoring)
   monitoringRef.current = monitoring
-  // Read inside the effect rather than in its dependencies: `ensure` is stable,
-  // and a handle that changed identity would re-acquire the microphone.
-  const mixerRef = useRef(mixer)
-  mixerRef.current = mixer
+  // Read inside the effect and the loop rather than in their dependencies:
+  // both are stable in practice, and a handle or a callback that changed
+  // identity would re-acquire the microphone on a render.
+  const busRef = useRef(bus)
+  busRef.current = bus
+  const levelRef = useRef(onLevel)
+  levelRef.current = onLevel
 
   const refreshDevices = useCallback(async () => {
     if (!navigator.mediaDevices?.enumerateDevices) return
@@ -200,7 +237,7 @@ export function useMicInput(mixer: AirMixerHandle): MicInput {
 
         // The mixer's, not one of this hook's own, and built on the click that
         // asked for the microphone. See `useAirMixer`.
-        const air = mixerRef.current.ensure()
+        const air = busRef.current.ensure()
         const context = air?.context ?? null
         if (!air || !context) {
           // Nothing to recover, and the capture has to go back: a browser
@@ -242,12 +279,21 @@ export function useMicInput(mixer: AirMixerHandle): MicInput {
         const samples = new Uint8Array(analyser.fftSize)
         let level = 0
         let clipUntil = 0
+        let last = performance.now()
 
         const paint = () => {
           rig.frame = requestAnimationFrame(paint)
           analyser.getByteTimeDomainData(samples)
-          level = nextLevel(level, levelFrom(samples))
-          if (clippedIn(samples)) clipUntil = performance.now() + CLIP_HOLD_MS
+          const raw = levelFrom(samples)
+          level = nextLevel(level, raw)
+          const now = performance.now()
+          // The raw number and a real interval, so whatever is reading this is
+          // not assuming sixty frames a second on a machine that is not giving
+          // them. A backgrounded tab stops painting altogether, which is one
+          // long frame rather than a lot of missing ones.
+          levelRef.current?.(raw, now - last)
+          last = now
+          if (clippedIn(samples)) clipUntil = now + CLIP_HOLD_MS
 
           // Monitoring is read here rather than in an effect of its own so that
           // it is one assignment in a loop that is already running, and so a
@@ -259,7 +305,7 @@ export function useMicInput(mixer: AirMixerHandle): MicInput {
             bar.style.transform = `scaleX(${meterScale(level).toFixed(3)})`
             // An attribute rather than React state: the loop runs sixty times a
             // second and must not render the console on any of them.
-            bar.dataset.clip = performance.now() < clipUntil ? 'true' : 'false'
+            bar.dataset.clip = now < clipUntil ? 'true' : 'false'
           }
         }
         paint()
@@ -362,6 +408,7 @@ export function useMicInput(mixer: AirMixerHandle): MicInput {
     monitoring,
     meterRef,
     live: status === 'live',
+    talking,
     open,
     close,
     choose,

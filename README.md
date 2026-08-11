@@ -1883,8 +1883,9 @@ npm run qa:admin       # sign in, upload, queue, reorder, drive the decks
 npm run qa:mic         # two listeners duck together, and a third arrives mid-break
 npm run qa:soundcheck  # opens a real microphone on the console and watches the meter
 npm run qa:voice       # a real voice, decks to listener, measured at the far end
+npm run qa:callin      # a caller refused for being on speakers, and one who passes
 
-npm run qa:all         # all fourteen, restarting the station between each
+npm run qa:all         # all fifteen, restarting the station between each
 ```
 
 Prefer `qa:all` for a full pass. Run back-to-back by hand they interfere with

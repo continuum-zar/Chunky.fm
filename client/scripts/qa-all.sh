@@ -52,7 +52,7 @@ restart_station() {
 }
 
 SCRIPTS=(
-  qa:playback qa:admin qa:mic qa:soundcheck qa:voice qa:chat qa:chat-refusal qa:wishes
+  qa:playback qa:admin qa:mic qa:soundcheck qa:voice qa:callin qa:chat qa:chat-refusal qa:wishes
   qa:history qa:presence qa:reconnect qa:offline verify:sync
 )
 

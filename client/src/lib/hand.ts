@@ -55,6 +55,39 @@ export function handRefusal(code: SocketErrorCode): string | null {
 }
 
 /**
+ * Where this listener's own music should sit while all this is going on, as a
+ * linear gain.
+ *
+ * The interesting case is the first one, and it is the strongest move available
+ * to a call-in: **a caller hears the studio, not the record.** While somebody is
+ * up, their own copy of the music goes to silence — not to the duck depth, all
+ * the way down.
+ *
+ * That removes the entire acoustic-echo problem in one line, because there is
+ * no music coming out of their speakers for their microphone to pick up. It
+ * also happens to be exactly what being a caller on real radio sounds like, so
+ * it needs no explaining to the person it happens to. And it costs nothing to
+ * undo: position is a pure function of the station clock, so coming back down
+ * is not a resynchronisation, it is a volume.
+ *
+ * Zero here against `MIN_DUCK` on the station, and the difference is the point.
+ * The station never ducks to silence because a listener who cannot hear the bed
+ * has no way to tell a mic break from the station having died. Somebody holding
+ * a microphone and watching their own meter is in no doubt.
+ *
+ * Note what this does *not* cover: the sound check, which runs before anybody
+ * is up and must have the music playing, because a microphone that can hear the
+ * station is exactly what it is looking for.
+ */
+export function deafened(
+  speaking: boolean,
+  mic: { live: boolean; duckTo: number } | null,
+): number {
+  if (speaking) return 0
+  return mic?.live ? mic.duckTo : 1
+}
+
+/**
  * How long is left on an invitation, in whole seconds, floored at zero.
  *
  * Counted down on the page rather than trusted from a timer, because the number

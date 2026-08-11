@@ -2843,6 +2843,45 @@ h2 {
   box-shadow: inset 0 0 0 1px rgb(251 44 54 / 30%);
 }
 
+/* The guest's own panel: the hint, and the meter under it.
+
+   Bigger than the console's meter, on purpose. Whoever runs the decks has a
+   lamp, a reach list and usually a second screen; a guest has this bar and
+   nothing else, and it is the only evidence they have that the microphone is
+   doing anything at all. That matters more here than it does there, because the
+   other way to find out is to hear yourself, which is the thing causing the
+   feedback this whole panel exists to prevent. */
+.called__hint {
+  margin: 10px 0 0;
+  color: var(--fg-dim);
+  font-size: 13px;
+  line-height: 19.5px;
+}
+
+.called__meter {
+  height: 10px;
+  margin-top: 10px;
+  border-radius: var(--pill);
+  background: var(--raised);
+  overflow: hidden;
+}
+
+/* Scaled rather than resized, for the reason the console's is: this is written
+   to on every animation frame, and a width would cost a layout each time. See
+   `useMicInput`, which writes straight to the node and never through React. */
+.called__meter-fill {
+  width: 100%;
+  height: 100%;
+  border-radius: var(--pill);
+  background: var(--ok);
+  transform: scaleX(0);
+  transform-origin: left center;
+}
+
+.called__meter-fill[data-clip='true'] {
+  background: var(--live);
+}
+
 /* Who else, besides whoever runs the decks, is allowed to talk.
 
    Under the mic card because it is the same control surface — who is talking

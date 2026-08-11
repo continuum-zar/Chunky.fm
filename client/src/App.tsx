@@ -10,10 +10,11 @@ import {
   useState,
 } from 'react'
 import { AdminPanel } from './AdminPanel.js'
+import { CallIn } from './CallIn.js'
 import { Lyrics } from './Lyrics.js'
 import { Sidebar } from './Sidebar.js'
 import { Topbar } from './Topbar.js'
-import { VOICE_CARRIES, handRefusal, secondsLeft } from './lib/hand.js'
+import { deafened, handRefusal } from './lib/hand.js'
 import { Deck, Mute, OnAir, Waveform } from './Turntable.js'
 import { type AdminSession, useAdminSession } from './hooks/useAdminSession.js'
 import { useNarrow } from './hooks/useNarrow.js'
@@ -296,6 +297,15 @@ function Station({ route: requested, session }: { route: Route; session: AdminSe
     socketEpoch,
   )
   const admin = isConsole(requested)
+  // Which of the three things this page is to the floor: nobody, the one being
+  // asked up, or the one talking. Read off a broadcast rather than from a frame
+  // addressed here, which is why the id has to be known first.
+  //
+  // Up here rather than beside the panel that draws them, because the first
+  // thing that reads them is the duck: somebody who is up hears no music at
+  // all, and that decision is made before the page has drawn anything.
+  const invited = me !== null && floor?.invited?.id === me
+  const speaking = me !== null && floor?.speaker?.id === me
   const clock = useServerClock(connection, { connected: status === 'connected' })
   // Only once tuned in: a socket is open from the moment the page loads, and a
   // name typed into the field is not yet a listener in the room.
@@ -417,8 +427,8 @@ function Station({ route: requested, session }: { route: Route; session: AdminSe
    * through the station. `duck` ramps; nothing here has to.
    */
   useEffect(() => {
-    stage.current?.duck(mic?.live ? mic.duckTo : 1)
-  }, [mic?.live, mic?.duckTo])
+    stage.current?.duck(deafened(speaking, mic))
+  }, [speaking, mic?.live, mic?.duckTo, mic])
 
   // Only this listener's own ears. Muting is not leaving, so the socket, the
   // roster and the clock all carry on exactly as they were.
@@ -542,12 +552,6 @@ function Station({ route: requested, session }: { route: Route; session: AdminSe
   // once it leads somewhere, and until then every view is the one you land on.
   const route: Route = needsJoin(requested) && !joined ? 'on-air' : requested
 
-  // Which of the three things this page is to the floor: nobody, the one being
-  // asked up, or the one talking. Read off a broadcast rather than from a frame
-  // addressed here, which is why the id has to be known first.
-  const invited = me !== null && floor?.invited?.id === me
-  const speaking = me !== null && floor?.speaker?.id === me
-
   const wishes = (
     <Wishes
       wishes={myWishes}
@@ -632,7 +636,7 @@ function Station({ route: requested, session }: { route: Route; session: AdminSe
             for. A banner in a panel behind a route is a microphone somebody
             forgot was open. */}
         {!admin && joined && (invited || speaking) && (
-          <Called
+          <CallIn
             connection={connection}
             invited={invited}
             speaking={speaking}
@@ -1319,99 +1323,6 @@ function Hand({
         </p>
       )}
     </section>
-  )
-}
-
-interface CalledProps {
-  connection: StationConnection | null
-  invited: boolean
-  speaking: boolean
-  /** Station epoch ms the invitation lapses at, or null when there is none. */
-  expiresAt: number | null
-  /**
-   * The station's clock.
-   *
-   * `expiresAt` is a point on it, so subtracting this browser's `Date.now()`
-   * would put the countdown wherever the two machines happen to disagree — and
-   * on a page whose clock is a minute out, would offer a button that had
-   * already stopped working, or take one away that had not.
-   */
-  serverNow(): number
-}
-
-/**
- * Being asked up, and being up.
- *
- * Above every view at every width, which is the whole point of it. An
- * invitation is time-limited and an open microphone is the one thing on this
- * page somebody must never have to go looking for: a notice tucked inside a
- * panel behind a route is a microphone somebody forgot was open.
- *
- * The countdown reads the station's own `expiresAt` rather than counting sixty
- * of its own seconds, so the number on screen and the moment the offer actually
- * lapses are the same moment.
- */
-function Called({ connection, invited, speaking, expiresAt, serverNow }: CalledProps) {
-  const [now, setNow] = useState(() => serverNow())
-
-  // Only while there is something counting down. A timer left running behind an
-  // open microphone would be a render a second for the rest of the call.
-  useEffect(() => {
-    if (expiresAt === null) return
-    setNow(serverNow())
-    const tick = window.setInterval(() => setNow(serverNow()), 500)
-    return () => window.clearInterval(tick)
-  }, [expiresAt, serverNow])
-
-  const send = (action: 'accept' | 'lower') => connection?.send({ type: 'hand', action })
-  const left = expiresAt === null ? 0 : secondsLeft(expiresAt, now)
-
-  if (speaking) {
-    return (
-      <div className="outage called called--up" data-testid="on-the-mic" role="status">
-        <p className="outage__headline">You're on the mic.</p>
-        <p className="outage__detail">
-          {VOICE_CARRIES
-            ? 'The room can hear you. The music has come down for it.'
-            : 'The music has come down for you across the room — but your voice does not travel yet, so nobody can hear you.'}
-        </p>
-        <button type="button" className="button" data-testid="come-down" onClick={() => send('lower')}>
-          Come down
-        </button>
-      </div>
-    )
-  }
-
-  if (!invited) return null
-
-  return (
-    <div className="outage called" data-testid="called-up" role="status">
-      <p className="outage__headline">The decks have asked you up.</p>
-      <p className="outage__detail">
-        {left > 0
-          ? `The offer is open for another ${left} second${left === 1 ? '' : 's'}.`
-          : 'The offer has run out.'}
-      </p>
-      <div className="called__actions">
-        <button
-          type="button"
-          className="button"
-          data-testid="go-up"
-          onClick={() => send('accept')}
-          disabled={left === 0}
-        >
-          Go up
-        </button>
-        <button
-          type="button"
-          className="button button--quiet"
-          data-testid="not-now"
-          onClick={() => send('lower')}
-        >
-          Not now
-        </button>
-      </div>
-    </div>
   )
 }
 

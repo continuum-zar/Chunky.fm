@@ -1,0 +1,284 @@
+/**
+ * A listener being brought up, in real browsers.
+ *
+ * The sound check is the one part of this feature that cannot be tested away
+ * from a browser, because what it actually measures is not arithmetic: it is
+ * whether a microphone can hear the station. `sound-check.test.ts` pins the
+ * state machine; this pins the thing the state machine is for.
+ *
+ * Two callers, and the difference between them is the whole milestone.
+ *
+ * **On speakers.** Chrome's built-in fake device is a beep every second, which
+ * for once is exactly the wrong shape to pass — and that is what makes it
+ * useful. It stands in for a laptop playing the station out loud with an open
+ * microphone in front of it, which is the failure the gate exists to catch, and
+ * it must never reach a way up.
+ *
+ * **On headphones.** A capture file of a second and a half of tone and then
+ * silence: somebody who speaks and whose microphone then hears nothing, because
+ * the station is not coming out of anything near it. They pass, they go up, and
+ * their own music goes to silence — which is the headline of the milestone, and
+ * the reason a caller hears the studio rather than the record.
+ *
+ * The capture file is written here rather than checked in: it is a sine wave
+ * and some zeroes, and a megabyte of that in a repository is a megabyte nobody
+ * can review.
+ *
+ * Needs a running Vite dev server, a running station, and a track on the decks.
+ * See README.
+ */
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { type Browser, type Page, chromium } from 'playwright-core'
+import {
+  ADMIN_PASSWORD,
+  CHROME_PATH,
+  Checks,
+  DUCKS,
+  type Duck,
+  INSTRUMENT_DUCKS,
+  STATION_URL,
+  micCommand,
+  tuneIn,
+  wait,
+} from './qa-env.js'
+
+const checks = new Checks()
+const ADMIN_URL = `${STATION_URL}#admin`
+
+/** How long to wait for a check to reach a verdict. It is ten seconds of real
+ *  time on a speaker, and about three on headphones; this is room for a slow
+ *  machine on top of both. */
+const VERDICT_MS = 30_000
+
+/**
+ * A caller wearing headphones, as a WAV: they say something, then nothing.
+ *
+ * Mono, 48 kHz, sixteen bit, written by hand because the alternative is a
+ * binary in the repository or a dependency on ffmpeg for a file that is a sine
+ * wave and some zeroes.
+ */
+function headphonesWav(): string {
+  const rate = 48_000
+  const toneS = 1.5
+  const silenceS = 8.5
+  const frames = Math.round((toneS + silenceS) * rate)
+  const data = Buffer.alloc(frames * 2)
+  for (let i = 0; i < Math.round(toneS * rate); i++) {
+    // Loud enough to be unambiguously somebody talking; see SPEAKING.
+    data.writeInt16LE(Math.round(Math.sin((2 * Math.PI * 330 * i) / rate) * 12_000), i * 2)
+  }
+
+  const header = Buffer.alloc(44)
+  header.write('RIFF', 0)
+  header.writeUInt32LE(36 + data.length, 4)
+  header.write('WAVE', 8)
+  header.write('fmt ', 12)
+  header.writeUInt32LE(16, 16)
+  header.writeUInt16LE(1, 20) // PCM
+  header.writeUInt16LE(1, 22) // mono
+  header.writeUInt32LE(rate, 24)
+  header.writeUInt32LE(rate * 2, 28)
+  header.writeUInt16LE(2, 32)
+  header.writeUInt16LE(16, 34)
+  header.write('data', 36)
+  header.writeUInt32LE(data.length, 40)
+
+  const file = path.join(mkdtempSync(path.join(tmpdir(), 'chunky-callin-')), 'headphones.wav')
+  writeFileSync(file, Buffer.concat([header, data]))
+  return file
+}
+
+function browserWith(capture: string | null): Promise<Browser> {
+  return chromium.launch({
+    executablePath: CHROME_PATH,
+    args: [
+      '--use-fake-ui-for-media-stream',
+      '--use-fake-device-for-media-stream',
+      // `%noloop` matters: looping the file would put the tone back every ten
+      // seconds, which is a caller who cannot stop talking rather than one on
+      // headphones.
+      ...(capture ? [`--use-file-for-fake-audio-capture=${capture}%noloop`] : []),
+    ],
+  })
+}
+
+/** Sign the console in and leave it on the desk. */
+async function decks(browser: Browser): Promise<Page> {
+  const page = await browser.newPage()
+  await page.goto(ADMIN_URL)
+  await page.fill('input[type=password]', ADMIN_PASSWORD)
+  await page.click('button[type=submit]')
+  await wait(2_000)
+  return page
+}
+
+/** Raise a hand and have the console answer it. */
+async function askedUp(guest: Page, console_: Page): Promise<void> {
+  await guest.click('[data-testid=hand-toggle]')
+  await wait(600)
+  await console_.locator('[data-testid=floor-hands] button').first().click()
+  await wait(800)
+}
+
+/** The check's verdict, or whatever it was still saying when time ran out. */
+async function verdict(guest: Page): Promise<{ passed: boolean; notice: string }> {
+  const until = Date.now() + VERDICT_MS
+  while (Date.now() < until) {
+    if ((await guest.locator('[data-testid=go-up]').count()) > 0) {
+      return { passed: true, notice: 'passed' }
+    }
+    const notice = ((await guest.locator('[data-testid=check-notice]').textContent()) ?? '').trim()
+    if (/Something is coming/i.test(notice)) return { passed: false, notice }
+    await wait(400)
+  }
+  return { passed: false, notice: 'never reached a verdict' }
+}
+
+async function onSpeakers(): Promise<void> {
+  console.log('\na caller whose microphone can hear the station…')
+  const browser = await browserWith(null)
+  try {
+    const guest = await browser.newPage()
+    await guest.goto(STATION_URL)
+    await tuneIn(guest, 'sipho')
+    await wait(1_200)
+    const console_ = await decks(browser)
+    await askedUp(guest, console_)
+
+    const offered = await guest.locator('[data-testid=called-up]').isVisible()
+    checks.run(
+      'the console can offer, and the offer arrives',
+      offered,
+      offered ? 'the invitation is on the guest' : 'nothing arrived',
+    )
+    // Before anything else: there is no way up on the page at all, rather than
+    // one that is present and disabled. A gate somebody can see is a gate
+    // somebody will try.
+    const early = await guest.locator('[data-testid=go-up]').count()
+    checks.run(
+      'there is no way up before the check',
+      early === 0,
+      early === 0 ? 'only a sound check is offered' : `${early} way(s) up`,
+    )
+
+    await guest.click('[data-testid=sound-check]')
+    const { passed, notice } = await verdict(guest)
+    checks.run(
+      'a room the microphone can hear is refused',
+      !passed && /headphones/i.test(notice),
+      notice.slice(0, 72),
+    )
+    const after = await guest.locator('[data-testid=go-up]').count()
+    checks.run(
+      'and there is still no way up afterwards',
+      after === 0,
+      after === 0 ? 'the gate held' : `${after} way(s) up`,
+    )
+    // The ordering the whole detector depends on: the station has to be playing
+    // where the guest is, or the quiet half is measuring nothing.
+    const playing = await guest.evaluate(`(() => {
+      const a = document.querySelector('audio')
+      return !!a && !a.paused && a.currentTime > 0
+    })()`)
+    checks.run(
+      'the station is still playing while they are checked',
+      Boolean(playing),
+      playing ? 'so there was something for it to detect' : 'the check tested nothing',
+    )
+  } finally {
+    await browser.close()
+  }
+}
+
+async function onHeadphones(): Promise<void> {
+  console.log('\na caller wearing headphones…')
+  const browser = await browserWith(headphonesWav())
+  try {
+    const guest = await browser.newPage()
+    // Before any of the app runs, so the very first ramp is caught.
+    await guest.addInitScript(INSTRUMENT_DUCKS)
+    await guest.goto(STATION_URL)
+    await tuneIn(guest, 'ama')
+    await wait(1_500)
+    const console_ = await decks(browser)
+    await askedUp(guest, console_)
+
+    await guest.click('[data-testid=sound-check]')
+    const { passed, notice } = await verdict(guest)
+    checks.run('they pass, and are offered a way up', passed, notice.slice(0, 72))
+    if (!passed) return
+
+    await guest.click('[data-testid=go-up]')
+    await wait(2_500)
+
+    checks.run(
+      'they land on the mic',
+      await guest.locator('[data-testid=on-the-mic]').isVisible(),
+      'the guest sees an on-air notice',
+    )
+    checks.run(
+      'and the console sees it',
+      (await console_.locator('[data-testid=floor-speaker]').count()) > 0,
+      'a speaker on the floor card',
+    )
+    const reach = (await console_.locator('[data-testid=mic-reach]').textContent())?.trim()
+    checks.run(
+      'the mesh is up for them',
+      Boolean(reach),
+      reach?.split('hearing')[0]?.trim() ?? 'no connections at all',
+    )
+    checks.run(
+      'and they have a mute they can reach',
+      await guest.locator('[data-testid=guest-mute]').isVisible(),
+      'a mute beside the on-air notice',
+    )
+
+    // The headline: a caller hears the studio, not the record. Silence rather
+    // than the duck depth, so there is nothing left for their own microphone
+    // to pick up.
+    const up = ((await guest.evaluate(DUCKS)) as Duck[]).at(-1)
+    checks.run(
+      'their own music goes to silence, not to the duck depth',
+      up?.target === 0,
+      `last ramp ${up?.target}`,
+    )
+
+    await guest.click('[data-testid=come-down]')
+    await wait(1_500)
+    checks.run(
+      'coming down hands the mic back',
+      (await console_.locator('[data-testid=floor-speaker]').count()) === 0,
+      'the floor is empty again',
+    )
+    // Back to the room's duck rather than to full, and that is the rule from
+    // the floor showing through: standing a guest down does not shut the mic,
+    // because whoever runs the decks nearly always says something after them.
+    const down = ((await guest.evaluate(DUCKS)) as Duck[]).at(-1)
+    checks.run(
+      "their music comes back to the room's duck, the mic still being open",
+      down?.target !== undefined && down.target > 0 && down.target < 1,
+      `last ramp ${down?.target}`,
+    )
+
+    await micCommand({ action: 'close' })
+    await wait(1_500)
+    const shut = ((await guest.evaluate(DUCKS)) as Duck[]).at(-1)
+    checks.run(
+      'and all the way back once the mic shuts',
+      shut?.target === 1,
+      `last ramp ${shut?.target}`,
+    )
+  } finally {
+    await browser.close()
+  }
+}
+
+async function main(): Promise<void> {
+  await onSpeakers()
+  await onHeadphones()
+  checks.finish('CALL-IN QA')
+}
+
+void main()

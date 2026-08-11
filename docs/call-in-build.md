@@ -465,7 +465,47 @@ console can open the mesh with no microphone granted.
 
 ---
 
-## C3 — the guest's sound check
+## C3 — the guest's sound check — **built**
+
+Shipped, and the interesting part is what the check turned out to be.
+
+**It is a speaker detector, not a silence test.** The sketch described two
+checks — say something, then don't — as if the second were about a quiet room.
+It is not: the guest's music is still playing while it runs, because they have
+not come up yet, so a microphone that hears anything is a microphone that can
+hear the station, and on headphones it hears nothing. That reframing is load
+bearing in two directions. It means the check must run *before* the local music
+is taken away, which is an ordering the page has to preserve; and it means a
+check run during a gap between tracks has nothing to detect, which is a few
+seconds an evening and not worth engineering around. Both are written down where
+somebody will find them.
+
+**The verdict is slower than it looks and that is fine.** Measured in a browser:
+a caller whose microphone can hear the station is refused at about ten seconds,
+and one on headphones passes in about three. Against a sixty-second invitation
+there is room for a failure and a retry, which was the number that needed
+checking.
+
+Three things that came out different from the sketch:
+
+- **`useMicInput` now takes a bus rather than the console's mixer.** A guest
+  needs one destination, not two, so `lib/mixer.ts` grew a `guestBus` beside
+  `airMixer` and both satisfy a small `OutputBus`. The rig is otherwise
+  identical at both ends of a call, which is the payoff for having separated it
+  in C2 — the guest's microphone, meter, device handling and mute are the
+  console's, with echo cancellation started on the other side of the switch.
+- **The check reads the raw level, not the meter's.** The needle falls slowly on
+  purpose — it is drawing the shape of a sentence — and a decision about whether
+  a room is quiet made on it would keep failing rooms that had already gone
+  silent. `useMicInput` gained an `onLevel` tap that hands out the raw number and
+  a real interval, so a backgrounded tab reads as one long frame rather than a
+  lot of missing ones.
+- **`Called` became `CallIn.tsx`,** because it grew a microphone, a check and a
+  meter, and `App.tsx` did not need another two hundred lines.
+
+**Verified:** 23 new tests, and a new `qa:callin` — two real browsers, one
+refused for being on speakers and one who passes, goes up, and whose own music
+is measured going to silence and coming back. `qa:voice` still passes unchanged.
 
 Entirely client-side, no protocol changes, nothing transmitted. The guest opens
 their microphone, sees a meter, and is told whether their room is going to be a
@@ -533,9 +573,22 @@ who forgets to mute.
 
 ### Tests
 
-`client/test/sound-check.test.ts` — the state machine over a sequence of levels:
-silence never passes `speak`; noise never passes `quiet`; the two in order pass.
-Pure, and testable away from React like everything else under a hook here.
+`client/test/sound-check.test.ts`, 15 tests over sequences of levels: silence
+never passing `speak`; speech counted cumulatively, because "hello" is three
+bursts with air between them; unbroken silence required for the second half; the
+budget starting when the quiet half does rather than when the check did; and a
+single long frame — a tab that was in a pocket — read as the time it really was
+rather than as one frame.
+
+Plus `deafened` in `hand.test.ts`, which is the whole of "a caller hears the
+studio, not the record" as four assertions, and `guestBus` in `mixer.test.ts`.
+
+What none of that can test is whether the check detects the thing it is for, so
+`npm run qa:callin` does: a caller on Chrome's beeping fake device — which is
+exactly the wrong shape to pass, and stands in for a laptop playing the station
+out loud — never reaching a way up, and a caller on a capture file of speech
+then silence passing, going up, and having their own music measured going to
+zero and back.
 
 **C3 is done when** a guest can be invited, pass a sound check, come up, hear
 their own music go silent, watch their meter move — and still not be heard.
@@ -795,7 +848,7 @@ for building it this way.
 |---|---|---|---|---|
 | C1 | The floor, no audio | Low | **built** — ~1,000 lines with tests | **Yes** |
 | C2 | Extract `useAirMixer` | Low | **built** — ~700 lines with tests | Yes |
-| C3 | The guest's sound check | Low | ~250 lines | **Yes** |
+| C3 | The guest's sound check | Low | **built** — ~900 lines with tests | **Yes** |
 | C4 | The talk channel, cue only | **High** | ~250 lines | **Yes** — audition |
 | C5 | Mix-minus, on air, the cut | Medium | ~150 lines | — |
 | C6 | Survive contact | Medium | ~150 lines | — |
