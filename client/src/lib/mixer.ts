@@ -169,6 +169,33 @@ const DEAF: AirMixer = {
   close: () => undefined,
 }
 
+/**
+ * A silent element to park a guest's stream on.
+ *
+ * The same workaround `audio-graph.ts` needs on the listener's side, and it
+ * bites here for the same reason and in the same disguise: Chrome will not
+ * decode a `MediaStream` that is only connected to Web Audio, so
+ * `createMediaStreamSource` on its own builds a graph that runs perfectly and
+ * carries nothing. Attaching the stream to a media element is what starts the
+ * decoder.
+ *
+ * What makes it worth a comment in two places is how it presents. The peer
+ * connection is `connected`, the console's own health column says *you can hear
+ * them*, the guest's meter is moving on their machine — and there is silence.
+ * Every instrument says the call is working except the only one that counts.
+ *
+ * Muted, because it is not the thing being listened to: the audible path is the
+ * graph, and letting both through would be one voice played twice, slightly
+ * apart. Created rather than rendered, because it is not part of any page.
+ */
+function decoderSink(): HTMLAudioElement | null {
+  if (typeof document === 'undefined') return null
+  const sink = document.createElement('audio')
+  sink.autoplay = true
+  sink.muted = true
+  return sink
+}
+
 function ramp(param: AudioParam, to: number, at: number, seconds: number): void {
   // Read first, then pin: `value` during an automation is the level right now,
   // so a fader interrupted halfway carries on from where it actually is rather
@@ -207,6 +234,7 @@ export function airMixer(context: AudioContext): AirMixer {
 
   // The guest half, built on the first voice and kept afterwards.
   let guest: MediaStreamAudioSourceNode | null = null
+  let sink: HTMLAudioElement | null = null
   let cueGain: GainNode | null = null
   let airGain: GainNode | null = null
   // What the console asked for before there was anybody to apply it to.
@@ -236,9 +264,21 @@ export function airMixer(context: AudioContext): AirMixer {
     hear(stream: MediaStream | null) {
       guest?.disconnect()
       guest = null
-      if (stream === null) return
+      if (stream === null) {
+        if (sink) sink.srcObject = null
+        return
+      }
 
       resume()
+      // Before the graph, and the reason is above: without an element to drive
+      // it, nothing downstream of `createMediaStreamSource` ever gets a sample.
+      sink ??= decoderSink()
+      if (sink) {
+        sink.srcObject = stream
+        // Refused where a gesture is genuinely required. The graph below is the
+        // audible path either way, so this is the decoder and not the sound.
+        void sink.play().catch(() => undefined)
+      }
       cueGain ??= context.createGain()
       airGain ??= context.createGain()
       // Both start shut. A guest whose voice arrived already on the air would
@@ -277,6 +317,7 @@ export function airMixer(context: AudioContext): AirMixer {
 
     close() {
       guest?.disconnect()
+      if (sink) sink.srcObject = null
       talkIn.disconnect()
       for (const track of roomBus.stream.getAudioTracks()) track.stop()
       for (const track of guestBus.stream.getAudioTracks()) track.stop()

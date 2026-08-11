@@ -75,6 +75,11 @@ describe('every socket refusal is machine-readable', () => {
       ['empty_wish', () => client.send({ type: 'wish', text: ' \t ' })],
       ['wish_too_long', () => client.send({ type: 'wish', text: 'x'.repeat(201) })],
       ['unrecognised_message', () => client.send({ type: 'hand', action: 'seize' } as never)],
+      // `may_not_offer` is deliberately not here. Reaching it needs a console
+      // on the other end, because *who may be addressed* is checked before
+      // *what may be sent* — a listener offering another listener is told the
+      // more fundamental thing. It is pinned in `signalling.test.ts`, which has
+      // a decks socket to address.
     ]
 
     for (const [code, send] of cases) {

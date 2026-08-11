@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useGuestVoice } from './hooks/useGuestVoice.js'
+import type { GuestVoice } from './hooks/useGuestVoice.js'
 import { VOICE_CARRIES, secondsLeft } from './lib/hand.js'
 import type { StationConnection } from './lib/station.js'
 import { checkNotice } from './lib/sound-check.js'
@@ -25,6 +25,14 @@ import { checkNotice } from './lib/sound-check.js'
 
 export interface CallInProps {
   connection: StationConnection | null
+  /**
+   * This listener's microphone. Held by the page rather than by this panel,
+   * because the talk channel needs the track before there is anything on
+   * screen to draw. See `App`.
+   */
+  guest: GuestVoice
+  /** Whether the voice is actually reaching the decks, not merely open. */
+  heard: boolean
   invited: boolean
   speaking: boolean
   /** Station epoch ms the invitation lapses at, or null when there is none. */
@@ -40,10 +48,23 @@ export interface CallInProps {
   serverNow(): number
 }
 
-export function CallIn({ connection, invited, speaking, expiresAt, serverNow }: CallInProps) {
+export function CallIn({
+  connection,
+  guest,
+  heard,
+  invited,
+  speaking,
+  expiresAt,
+  serverNow,
+}: CallInProps) {
   const [now, setNow] = useState(() => serverNow())
-  const guest = useGuestVoice()
   const { begin, end } = guest
+  // Destructured, and that is not tidiness. `guest.input` is a fresh object on
+  // every render, so an effect that depended on it would run on every render —
+  // and the one below would put `talking` back to whatever `speaking` says a
+  // frame after somebody pressed mute, which is a mute button that does not
+  // mute. `setTalking` is a `useState` setter and is stable.
+  const { setTalking } = guest.input
 
   // Only while there is something counting down. A timer left running behind an
   // open microphone would be a render a second for the rest of the call.
@@ -62,11 +83,12 @@ export function CallIn({ connection, invited, speaking, expiresAt, serverNow }: 
     if (!invited && !speaking) end()
   }, [invited, speaking, end])
 
-  // Somebody who is up is sending, or will be the moment there is anything to
-  // send down. This is what the mute button toggles.
+  // Open on the way up and shut on the way down, and untouched in between:
+  // what happens while somebody is up is the mute button's business, and an
+  // effect that kept asserting an answer would be arguing with them.
   useEffect(() => {
-    guest.input.setTalking(speaking)
-  }, [speaking, guest.input])
+    setTalking(speaking)
+  }, [speaking, setTalking])
 
   const send = (action: 'accept' | 'lower') => connection?.send({ type: 'hand', action })
   const left = expiresAt === null ? 0 : secondsLeft(expiresAt, now)
@@ -75,10 +97,12 @@ export function CallIn({ connection, invited, speaking, expiresAt, serverNow }: 
     return (
       <div className="outage called called--up" data-testid="on-the-mic" role="status">
         <p className="outage__headline">You're on the mic.</p>
-        <p className="outage__detail">
+        <p className="outage__detail" data-testid="on-the-mic-detail">
           {VOICE_CARRIES
             ? 'The room can hear you. The music has come down for it, and yours has gone quiet so it cannot get back into your microphone.'
-            : 'The music has come down for you across the room, and yours has gone quiet — but your voice does not travel yet, so nobody can hear you.'}
+            : heard
+              ? 'Whoever runs the decks can hear you, and the music has come down across the room — but the room itself cannot hear you yet.'
+              : 'The music has come down for you across the room. Your microphone is on its way to the decks.'}
         </p>
 
         <Meter guest={guest} />
@@ -186,7 +210,7 @@ export function CallIn({ connection, invited, speaking, expiresAt, serverNow }: 
  * guest needs it more: they have no lamp, no reach list and no second screen,
  * and this is the only evidence they have that anything is happening at all.
  */
-function Meter({ guest }: { guest: ReturnType<typeof useGuestVoice> }) {
+function Meter({ guest }: { guest: GuestVoice }) {
   return (
     <div className="called__meter" data-testid="guest-meter" role="presentation">
       <div className="called__meter-fill" ref={guest.input.meterRef} data-clip="false" />

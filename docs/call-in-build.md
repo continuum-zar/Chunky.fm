@@ -595,7 +595,50 @@ their own music go silent, watch their meter move — and still not be heard.
 
 ---
 
-## C4 — the talk channel, to your headphones only
+## C4 — the talk channel, to your headphones only — **built**
+
+Shipped, and it earned its billing as the risky one — not in the negotiation,
+which went in as designed, but in two bugs that every instrument except the
+right one reported as success.
+
+**A guest's stream needs an element to decode it.** The same Chrome quirk
+`audio-graph.ts` has documented since M3, reappearing on the console's side of
+the call and wearing the same disguise: the peer connection is `connected`, the
+console's own health column says *you can hear them*, the guest's meter is
+moving on their machine — and there is silence. `createMediaStreamSource` on its
+own builds a graph that runs and carries nothing. The fix is the one that was
+already written down twenty lines away, and the lesson is that the workaround
+belongs anywhere a remote stream meets Web Audio, not only where it was first
+found.
+
+**The mute button did not mute.** `guest.input` is a fresh object every render,
+so the effect that opens the microphone on the way up ran on every render too,
+and put `talking` back a frame after anybody pressed mute. Destructuring the
+`useState` setter — which is stable — fixed it. Neither of these is reachable by
+a unit test: both are a real connection carrying real audio, and both were found
+by measuring the console's own headphones.
+
+Three things that came out different from the sketch:
+
+- **The server rule got simpler and stronger.** The plan had the station
+  refusing an offer from a listener *who does not hold the floor*, which would
+  have meant the socket layer knowing about the floor. It does not need to: under
+  this design a listener never offers at all, including the guest, because the
+  decks offer `recvonly` and the guest answers. So the rule is just *listeners do
+  not start negotiations* — one `kindOf` peek, no floor, no SDP parsed.
+- **The channel tag is stamped inside `link`,** not by callers. A payload that
+  left without one would be dropped by whichever connection caught it, silently,
+  and "every caller remembered" is not a property worth relying on.
+- **The cue lives on the mic card, not the floor card.** The floor card is about
+  permission; whether you can hear somebody is about audio, and it belongs beside
+  the list of who can hear you — one of it and thirty of those, which is why it
+  sits above rather than in that list.
+
+**Verified:** 6 new unit tests on the negotiation, 3 on the station's refusal, 2
+on the decoder sink, and `qa:callin` grown to measure the console's own
+headphones: nothing before they come up, a voice at peak 0.51 once they do,
+silence when they mute, and silence again when they come down. `qa:voice`
+unchanged.
 
 The risky milestone. Do it alone, the way M3 was done, and stop before the room
 hears anything. What you get at the end of it is genuinely useful on its own:
@@ -703,12 +746,16 @@ you* (listen channel) and *you cannot hear them* (talk channel).
 
 ### Tests
 
-- `client/test/webrtc.test.ts` — a candidate tagged `talk` reaches the talk link
-  and not the listen link; `isSignalPayload` rejects an unknown channel.
-- `client/test/voice-gate.test.ts` — an offer on the talk channel from an id that
-  does not hold the floor is ignored.
-- `server/test/realtime.test.ts` — the server refuses to relay an offer from a
-  listener without the floor, and still relays their answers and candidates.
+- `client/test/webrtc.test.ts` — the decks offering `recvonly` even for a voice
+  coming the other way; the microphone going onto the transceiver the offer made
+  rather than onto a second one; `sendonly` set explicitly, because a `recvonly`
+  offer is answered `inactive` by default; the guest's leg costing more than the
+  fan-out does; candidates tagged; and an unknown channel refused rather than
+  guessed at.
+- `server/test/signalling.test.ts` — an offer from a listener refused by name,
+  and their answers and candidates still carried, tag and all.
+- `client/test/mixer.test.ts` — the stream parked on a muted element, which is
+  the bug above with a test on it now.
 
 **C4 is done when** you can hear a guest in your headphones and nobody else can
 hear a thing.
@@ -849,7 +896,7 @@ for building it this way.
 | C1 | The floor, no audio | Low | **built** — ~1,000 lines with tests | **Yes** |
 | C2 | Extract `useAirMixer` | Low | **built** — ~700 lines with tests | Yes |
 | C3 | The guest's sound check | Low | **built** — ~900 lines with tests | **Yes** |
-| C4 | The talk channel, cue only | **High** | ~250 lines | **Yes** — audition |
+| C4 | The talk channel, cue only | **High** | **built** — ~700 lines with tests | **Yes** — audition |
 | C5 | Mix-minus, on air, the cut | Medium | ~150 lines | — |
 | C6 | Survive contact | Medium | ~150 lines | — |
 

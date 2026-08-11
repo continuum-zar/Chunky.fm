@@ -21,17 +21,46 @@
  * them, the same way it carries no audio. Kept to three shapes so the client
  * side can at least tell an offer from a candidate without parsing SDP.
  */
-export type SignalPayload =
+export type SignalPayload = (
   | { kind: 'offer'; sdp: string }
   | { kind: 'answer'; sdp: string }
   | { kind: 'ice'; candidate: RTCIceCandidateInit }
+) & { channel?: Channel }
+
+/**
+ * Which of the two connections between the decks and one listener this belongs
+ * to. Absent means `listen`, so nothing already on the wire changes meaning.
+ *
+ * A guest has two, and they are deliberately separate rather than one
+ * bidirectional connection: their uplink and their downlink then fail
+ * independently and are diagnosed independently, which matters because "they
+ * cannot hear you" and "you cannot hear them" have different causes and
+ * different fixes.
+ *
+ * The tag is not decoration. Both connections carry signalling from the same
+ * socket id, so without it an ICE candidate for one is indistinguishable from a
+ * candidate for the other, and whichever link receives it wrongly discards it —
+ * silently, and as a connection that simply never establishes.
+ */
+export type Channel = 'listen' | 'talk'
 
 export function isSignalPayload(value: unknown): value is SignalPayload {
   if (typeof value !== 'object' || value === null) return false
-  const payload = value as { kind?: unknown; sdp?: unknown; candidate?: unknown }
+  const payload = value as { kind?: unknown; sdp?: unknown; candidate?: unknown; channel?: unknown }
+  // Absent is `listen`; anything else named is a client this one does not
+  // understand, and guessing which connection it meant would be worse than
+  // dropping it.
+  if (payload.channel !== undefined && payload.channel !== 'listen' && payload.channel !== 'talk') {
+    return false
+  }
   if (payload.kind === 'offer' || payload.kind === 'answer') return typeof payload.sdp === 'string'
   if (payload.kind === 'ice') return typeof payload.candidate === 'object' && payload.candidate !== null
   return false
+}
+
+/** Which connection a payload belongs to, with the default applied. */
+export function channelOf(payload: SignalPayload): Channel {
+  return payload.channel ?? 'listen'
 }
 
 /**
@@ -45,6 +74,18 @@ export function isSignalPayload(value: unknown): value is SignalPayload {
  */
 export const VOICE_BITRATE = 32_000
 
+/**
+ * What a guest's voice is worth on the way *in*.
+ *
+ * Higher than `VOICE_BITRATE`, and for two reasons that both point the same
+ * way. This is one connection rather than one per listener, so the arithmetic
+ * that makes 32 kbps the right answer for fan-out does not apply. And it is the
+ * input to a re-encode: whatever arrives here is decoded, mixed, and encoded
+ * again into every listener's stream, and Opus twice at speech bitrates is a
+ * small real cost that better input makes smaller.
+ */
+export const GUEST_BITRATE = 48_000
+
 export interface PeerLinkOptions {
   iceServers: RTCIceServer[]
   /** Hand a payload to the far end. The socket is the only route there. */
@@ -53,6 +94,22 @@ export interface PeerLinkOptions {
   onState?(state: RTCPeerConnectionState): void
   /** Who this connection is with, for the log line when it settles. */
   label?: string
+  /**
+   * Which of the two connections this is. Stamped on everything sent, so no
+   * caller has to remember to.
+   */
+  channel?: Channel
+  /**
+   * A track to put on the answer, for the one connection that carries a voice
+   * back.
+   *
+   * Only a guest ever sets this, and only on the talk channel. The decks offer
+   * `recvonly` — *I would like to receive* — and this is what turns the answer
+   * into `sendonly` with a microphone on it. Doing it here rather than by
+   * adding a track up front keeps the transceiver the offer created, which is
+   * the one the far end is expecting an answer about.
+   */
+  answerWith?: MediaStreamTrack
 }
 
 /**
@@ -155,7 +212,14 @@ export interface PeerLink {
   close(): void
 }
 
-function link(pc: RTCPeerConnection, { send, onState, iceServers, label = 'peer' }: PeerLinkOptions): PeerLink {
+function link(
+  pc: RTCPeerConnection,
+  { send, onState, iceServers, label = 'peer', channel = 'listen', answerWith }: PeerLinkOptions,
+): PeerLink {
+  // Stamped here rather than by every caller, so a payload cannot leave without
+  // saying which connection it came from — which is the one mistake that would
+  // be invisible until a candidate went to the wrong link and was dropped.
+  const post = (payload: SignalPayload) => send({ ...payload, channel })
   const gathered: Record<string, number> = {}
   const received: Record<string, number> = {}
   let settled = false
@@ -203,7 +267,7 @@ function link(pc: RTCPeerConnection, { send, onState, iceServers, label = 'peer'
       ? 'end-of-candidates'
       : (event.candidate.type ?? candidateType(event.candidate.candidate))
     gathered[type] = (gathered[type] ?? 0) + 1
-    send({ kind: 'ice', candidate: event.candidate.toJSON() })
+    post({ kind: 'ice', candidate: event.candidate.toJSON() })
   }
   pc.onconnectionstatechange = () => {
     const state = pc.connectionState
@@ -234,9 +298,14 @@ function link(pc: RTCPeerConnection, { send, onState, iceServers, label = 'peer'
       }
       // An offer, which only a listener ever receives.
       await pc.setRemoteDescription({ type: 'offer', sdp: payload.sdp })
+      // Between the description and the answer, and only for a guest: the
+      // transceiver the offer created is the one the far end is expecting an
+      // answer about, so the microphone goes onto that rather than onto a new
+      // one of this side's making.
+      if (answerWith) await attach(pc, answerWith)
       const answer = await pc.createAnswer()
       await pc.setLocalDescription(answer)
-      send({ kind: 'answer', sdp: answer.sdp ?? '' })
+      post({ kind: 'answer', sdp: answer.sdp ?? '' })
     },
     close() {
       pc.onicecandidate = null
@@ -245,6 +314,49 @@ function link(pc: RTCPeerConnection, { send, onState, iceServers, label = 'peer'
       pc.close()
     },
   }
+}
+
+/**
+ * Put a microphone on the transceiver an offer just created, and answer with it.
+ *
+ * `replaceTrack` rather than `addTrack`, which would make a second transceiver
+ * and a second m-line the offer knows nothing about. The direction is set
+ * explicitly because a `recvonly` offer is answered `inactive` by default when
+ * the answerer has nothing to send, and having something to send is exactly
+ * what has changed here.
+ */
+async function attach(pc: RTCPeerConnection, track: MediaStreamTrack): Promise<void> {
+  const audio =
+    pc.getTransceivers().find((transceiver) => transceiver.receiver.track?.kind === 'audio') ??
+    pc.getTransceivers()[0]
+  if (!audio) return
+  try {
+    await audio.sender.replaceTrack(track)
+    audio.direction = 'sendonly'
+    const parameters = audio.sender.getParameters()
+    const encodings = parameters.encodings?.length ? parameters.encodings : [{}]
+    encodings[0] = { ...encodings[0], maxBitrate: GUEST_BITRATE }
+    await audio.sender.setParameters({ ...parameters, encodings })
+  } catch {
+    // A bitrate that failed to apply is a voice that costs more than it should;
+    // a track that failed to attach is a guest nobody can hear, and there is
+    // nothing useful to do about it here except let the answer go out and let
+    // the console's health column say so.
+  }
+}
+
+/** Make the offer and send it. Both offering ends do exactly this. */
+function propose(pc: RTCPeerConnection, options: PeerLinkOptions): void {
+  const channel = options.channel ?? 'listen'
+  void (async () => {
+    try {
+      const offer = await pc.createOffer()
+      await pc.setLocalDescription(offer)
+      options.send({ kind: 'offer', sdp: offer.sdp ?? '', channel })
+    } catch {
+      options.onState?.('failed')
+    }
+  })()
 }
 
 /**
@@ -276,17 +388,7 @@ export function offerVoice(track: MediaStreamTrack, options: PeerLinkOptions): P
   })()
 
   const made = link(pc, options)
-
-  void (async () => {
-    try {
-      const offer = await pc.createOffer()
-      await pc.setLocalDescription(offer)
-      options.send({ kind: 'offer', sdp: offer.sdp ?? '' })
-    } catch {
-      options.onState?.('failed')
-    }
-  })()
-
+  propose(pc, options)
   return made
 }
 
@@ -312,4 +414,44 @@ export function receiveVoice(options: ReceiveOptions): PeerLink {
     options.onStream(stream)
   }
   return link(pc, options)
+}
+
+/**
+ * The console's end of the talk channel: offers `recvonly`, receives a voice.
+ *
+ * The decks still always offer, and that is the point of doing it this way. The
+ * sentence this whole file rests on — *audio goes one way, the decks always
+ * offer, and a listener never does* — is what makes the negotiation the
+ * simplest one WebRTC allows, because two peers can only collide if both of
+ * them can start. Letting a guest offer would have bought nothing and cost that.
+ *
+ * So the direction is inverted in the offer rather than in who sends it: this
+ * says *I would like to receive*, and the guest answers `sendonly` with a
+ * microphone on it. It also means the server needs no new permission for any of
+ * this — a listener still never offers, which is now a rule the station itself
+ * enforces.
+ */
+export function inviteVoice(options: ReceiveOptions): PeerLink {
+  const pc = new RTCPeerConnection({ iceServers: options.iceServers })
+  pc.addTransceiver('audio', { direction: 'recvonly' })
+  pc.ontrack = (event) => {
+    const stream = event.streams[0] ?? new MediaStream([event.track])
+    options.onStream(stream)
+  }
+  const made = link(pc, options)
+  propose(pc, options)
+  return made
+}
+
+/**
+ * A guest's end of the talk channel: answers with a microphone, never offers.
+ *
+ * No transceiver is added here. The offer creates it, and `answerWith` is what
+ * puts the microphone on it — see `attach`. Adding one up front would make a
+ * second m-line the far end never asked about, and the guest would be answering
+ * a different question from the one they were asked.
+ */
+export function sendVoice(track: MediaStreamTrack, options: PeerLinkOptions): PeerLink {
+  const pc = new RTCPeerConnection({ iceServers: options.iceServers })
+  return link(pc, { ...options, answerWith: track })
 }

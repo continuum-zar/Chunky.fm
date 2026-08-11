@@ -57,11 +57,61 @@ async function decks(): Promise<TestClient> {
 const whoAmI = async (client: TestClient): Promise<number> =>
   ((await client.waitFor((m) => m.type === 'you')) as YouMessage).id
 
-const nextSignal = async (client: TestClient): Promise<SignalMessage> =>
-  (await client.waitFor((m) => m.type === 'signal')) as SignalMessage
+const nextSignal = async (client: TestClient, timeoutMs?: number): Promise<SignalMessage> =>
+  (await client.waitFor((m) => m.type === 'signal', timeoutMs)) as SignalMessage
 
 const nextError = async (client: TestClient): Promise<ErrorMessage> =>
   (await client.waitFor((m) => m.type === 'error')) as ErrorMessage
+
+describe('who may start a negotiation', () => {
+  it('refuses an offer from a listener, even one who has the mic', async () => {
+    const console_ = await decks()
+    const listener_ = await listener()
+    const deckId = await whoAmI(console_)
+
+    listener_.send({ type: 'signal', to: deckId, payload: { kind: 'offer', sdp: 'mine' } })
+
+    // The decks always offer, including for a guest's microphone, which travels
+    // on a connection the decks offered `recvonly` and the guest answered. That
+    // asymmetry is what keeps the negotiation the simplest one WebRTC allows,
+    // and it is worth the station enforcing rather than only the console.
+    expect((await nextError(listener_)).code).toBe('may_not_offer')
+    await expect(nextSignal(console_, 200)).rejects.toThrow(/timed out/)
+  })
+
+  it('still carries their answers and their addresses', async () => {
+    const console_ = await decks()
+    const listener_ = await listener()
+    const deckId = await whoAmI(console_)
+
+    // The half of a negotiation a listener does have. Refusing these too would
+    // be refusing the voice itself.
+    listener_.send({ type: 'signal', to: deckId, payload: { kind: 'answer', sdp: 'mine' } })
+    expect((await nextSignal(console_)).payload).toMatchObject({ kind: 'answer' })
+
+    listener_.send({
+      type: 'signal',
+      to: deckId,
+      payload: { kind: 'ice', candidate: { candidate: 'a' }, channel: 'talk' },
+    })
+    // Including the channel tag, which the station carries without reading:
+    // which of two connections a payload belongs to is the client's business.
+    expect((await nextSignal(console_)).payload).toMatchObject({
+      kind: 'ice',
+      channel: 'talk',
+    })
+  })
+
+  it('lets the decks offer anybody, which is what fanning out is', async () => {
+    const console_ = await decks()
+    const listener_ = await listener()
+    const id = await whoAmI(listener_)
+
+    console_.send({ type: 'signal', to: id, payload: { kind: 'offer', sdp: 'yours' } })
+
+    expect((await nextSignal(listener_)).payload).toMatchObject({ kind: 'offer' })
+  })
+})
 
 describe('who a socket is', () => {
   it('is the first thing it is told', async () => {

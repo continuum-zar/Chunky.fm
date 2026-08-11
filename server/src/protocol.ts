@@ -316,6 +316,22 @@ export type SocketErrorCode =
    * between the roster and the offer, which is ordinary rather than an error.
    */
   | 'no_such_peer'
+  /**
+   * A listener tried to start a negotiation.
+   *
+   * The decks always offer and a listener never does — including the one who
+   * has been brought up, whose microphone is carried on a connection the decks
+   * offered `recvonly` and they answered. That is what keeps the negotiation
+   * the simplest one WebRTC allows, since two peers can only collide if both
+   * of them can start.
+   *
+   * Enforced here as well as on the console because it is nearly free: the
+   * station already reads `payload.kind` to decide a log level, so it can
+   * refuse this without ever parsing SDP and without acquiring an opinion about
+   * WebRTC versions it has no way to keep current. What it buys is that a
+   * listener cannot push audio at whoever runs the decks unasked.
+   */
+  | 'may_not_offer'
 
 /**
  * Which frame a refusal is about, when it is about one.

@@ -105,7 +105,18 @@ class FakeContext {
   }
 }
 
+class FakeElement {
+  autoplay = false
+  muted = false
+  srcObject: MediaStream | null = null
+  plays = 0
+  async play(): Promise<void> {
+    this.plays += 1
+  }
+}
+
 let context: FakeContext
+let elements: FakeElement[] = []
 const build = () => airMixer(context as unknown as AudioContext)
 const stream = () => ({}) as MediaStream
 
@@ -133,6 +144,14 @@ function faderTo(to: FakeNode): FakeGain | undefined {
 
 beforeEach(() => {
   context = new FakeContext()
+  elements = []
+  ;(globalThis as { document?: unknown }).document = {
+    createElement: () => {
+      const element = new FakeElement()
+      elements.push(element)
+      return element
+    },
+  }
 })
 
 describe('the buses', () => {
@@ -222,6 +241,30 @@ describe('mix-minus', () => {
     // Pre-fade listen: auditioning a caller must not be broadcasting them.
     expect(reaches(cue as unknown as FakeNode, room!)).toBe(false)
     expect(reaches(cue as unknown as FakeNode, guest!)).toBe(false)
+  })
+
+  it('parks the stream on an element, or Chrome never decodes it', () => {
+    const mixer = build()
+    const voice = stream()
+
+    mixer.hear(voice)
+
+    // The failure this prevents is the worst shape one can take: the peer
+    // connection is `connected`, the console's health column says "you can hear
+    // them", the guest's own meter is moving — and there is silence. Every
+    // instrument says the call is working except the only one that counts.
+    expect(elements[0]?.srcObject).toBe(voice)
+    expect(elements[0]?.muted).toBe(true)
+    expect(elements[0]?.plays).toBe(1)
+  })
+
+  it('lets the element go when the voice does', () => {
+    const mixer = build()
+    mixer.hear(stream())
+
+    mixer.hear(null)
+
+    expect(elements[0]?.srcObject).toBeNull()
   })
 
   it('replaces one voice with the next rather than stacking them', () => {

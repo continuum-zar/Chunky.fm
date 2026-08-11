@@ -25,6 +25,7 @@ import { useServerClock } from './hooks/useServerClock.js'
 import { type SyncTrails, useSyncTrails } from './hooks/useSyncTrails.js'
 import { useStation } from './hooks/useStation.js'
 import { useSyncedAudio } from './hooks/useSyncedAudio.js'
+import { useGuestVoice } from './hooks/useGuestVoice.js'
 import { useIceServers, useVoiceReceiver } from './hooks/useVoice.js'
 import { seekTo } from './lib/audio-element.js'
 import { type StationAudio, stationAudio } from './lib/audio-graph.js'
@@ -405,6 +406,16 @@ function Station({ route: requested, session }: { route: Route; session: AdminSe
 
   // Asked for by whichever end of a voice this page is, and it can be both.
   const iceServers = useIceServers(joined || admin)
+  /**
+   * This listener's own microphone, for the one of them who gets brought up.
+   *
+   * Held here rather than inside the panel that draws it, because the receiver
+   * below needs the track: a talk-channel offer arrives at this page and has to
+   * be answered with something, and a hook that only existed while a banner was
+   * on screen would not have it yet. Costs nothing on the pages that never call
+   * in — nothing is built until somebody presses a button.
+   */
+  const guest = useGuestVoice()
   const voice = useVoiceReceiver({
     connection,
     me,
@@ -414,6 +425,10 @@ function Station({ route: requested, session }: { route: Route; session: AdminSe
     active: joined && (air?.live ?? false),
     iceServers,
     onStream: useCallback((stream: MediaStream | null) => stage.current?.play(stream), []),
+    // Only while this listener actually holds the floor. Handing the track over
+    // whenever the microphone happened to be open would let a page answer an
+    // offer it was never meant to get.
+    talkTrack: speaking ? guest.track : null,
   })
   useEffect(() => subscribe(voice.handleMessage), [subscribe, voice.handleMessage])
 
@@ -638,8 +653,10 @@ function Station({ route: requested, session }: { route: Route; session: AdminSe
         {!admin && joined && (invited || speaking) && (
           <CallIn
             connection={connection}
+            guest={guest}
             invited={invited}
             speaking={speaking}
+            heard={voice.talking === 'connected'}
             expiresAt={floor?.invited?.expiresAt ?? null}
             serverNow={clock.serverNow}
           />

@@ -46,7 +46,14 @@ import { type MicInput, useMicInput } from './hooks/useMicInput.js'
 import type { StationConnection, StationStatus } from './lib/station.js'
 import { type AirMixerHandle, useAirMixer } from './hooks/useAirMixer.js'
 import { VOICE_CARRIES } from './lib/hand.js'
-import { HEALTH, type PeerState, hearingCount, orderByHealth } from './lib/reach.js'
+import {
+  HEALTH,
+  PENDING,
+  type PeerHealth,
+  type PeerState,
+  hearingCount,
+  orderByHealth,
+} from './lib/reach.js'
 import { useVoiceBroadcast } from './hooks/useVoice.js'
 
 export interface AdminPanelProps {
@@ -817,6 +824,20 @@ function MicCard({
   )
   const targets = useMemo(() => room.map((listener) => listener.id), [room])
 
+  /**
+   * Whether the guest is in your headphones.
+   *
+   * On by default, because bringing somebody up is already the decision to talk
+   * to them, and a console that made you press a second button before you could
+   * hear the person you had just invited would be a console arguing with you.
+   * Off is for the times you want them warm on the line and out of your ears.
+   *
+   * Pre-fade listen, in a studio. Here it is which node is connected, and it
+   * reaches your headphones and nothing else — auditioning a caller must never
+   * be broadcasting them.
+   */
+  const [cueing, setCueing] = useState(true)
+
   const broadcast = useVoiceBroadcast({
     connection,
     me,
@@ -827,7 +848,20 @@ function MicCard({
     track: sending ? mixer.roomTrack : null,
     targets,
     iceServers,
+    speaker: floor?.speaker?.id ?? null,
+    // Straight into the mixer, which wires them to your headphones and to the
+    // room bus behind a fader that is shut. Wired and silent: somebody put in
+    // front of thirty people by a negotiation completing would be a decision
+    // nobody made.
+    onGuest: useCallback((stream: MediaStream | null) => mixer.mixer?.hear(stream), [mixer.mixer]),
   })
+
+  // Follow the button, and re-apply whenever a voice arrives: `hear` builds the
+  // guest half of the graph on the first call, so a cue set before there was
+  // anybody to apply it to has to be applied to them when they turn up.
+  useEffect(() => {
+    mixer.mixer?.cue(cueing)
+  }, [cueing, mixer.mixer, broadcast.guest])
   useEffect(() => subscribe(broadcast.handleMessage), [subscribe, broadcast.handleMessage])
   // What the slider shows while it is being dragged. The station's value is
   // the truth, but a fader that only moved when the round trip landed would
@@ -1046,6 +1080,15 @@ function MicCard({
 
       {/* Only during a broadcast. Off air there are no connections by design,
           and a list saying so would be reporting a decision as a fault. */}
+      {floor?.speaker && (
+        <GuestLink
+          nickname={floor.speaker.nickname}
+          state={broadcast.guest}
+          cueing={cueing}
+          onCue={setCueing}
+        />
+      )}
+
       {sending && onAir && <VoiceReach room={room} peers={broadcast.peers} />}
 
       <label className="mic__duck">
@@ -1168,6 +1211,58 @@ function FloorCard({ floor, hands, air, onBringUp, onStandDown }: FloorCardProps
         </ul>
       )}
     </section>
+  )
+}
+
+/**
+ * Whether you can hear the guest, which is not the same question as whether
+ * they can hear you.
+ *
+ * Two connections, two failures, two fixes. The reach list below answers "who
+ * can hear me"; this answers "can I hear them", and keeping them apart is the
+ * difference between somebody looking at the right end of a call and somebody
+ * looking at the wrong one. It sits above the list because there is one of it
+ * and thirty of those.
+ *
+ * The cue is here rather than on the floor card for the same reason: that card
+ * is about permission, and this is about audio.
+ */
+function GuestLink({
+  nickname,
+  state,
+  cueing,
+  onCue,
+}: {
+  nickname: string
+  state: PeerHealth | null
+  cueing: boolean
+  onCue(on: boolean): void
+}) {
+  const health = HEALTH[state ?? PENDING]
+  return (
+    <div className="guest" data-testid="guest-link" data-state={state ?? PENDING}>
+      <div className="guest__row">
+        <span className={`reach__dot reach__dot--${health.tone}`} aria-hidden="true" />
+        <span className="guest__who">{nickname}</span>
+        <span className="guest__state">
+          {state === 'connected' ? 'you can hear them' : health.label}
+        </span>
+      </div>
+      <label className="guest__cue">
+        <input
+          type="checkbox"
+          data-testid="guest-cue"
+          checked={cueing}
+          onChange={(event) => onCue(event.target.checked)}
+        />
+        In my headphones
+      </label>
+      {!VOICE_CARRIES && (
+        // The half of this that is not built yet, said where the decision to
+        // rely on it would be made. Goes with the constant.
+        <p className="guest__note">Yours only — the room cannot hear them yet.</p>
+      )}
+    </div>
   )
 }
 

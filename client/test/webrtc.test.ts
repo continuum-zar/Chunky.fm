@@ -1,11 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
+  GUEST_BITRATE,
   VOICE_BITRATE,
   type VoiceReport,
+  channelOf,
   diagnose,
+  inviteVoice,
   isSignalPayload,
   offerVoice,
   receiveVoice,
+  sendVoice,
   type SignalPayload,
 } from '../src/lib/webrtc.js'
 
@@ -26,11 +30,32 @@ interface Sent {
 class FakeSender {
   parameters: RTCRtpSendParameters = { encodings: [{}] } as RTCRtpSendParameters
   applied: RTCRtpSendParameters | null = null
+  replaceTrack: (track: MediaStreamTrack) => Promise<void> = async () => undefined
   getParameters(): RTCRtpSendParameters {
     return this.parameters
   }
   async setParameters(next: RTCRtpSendParameters): Promise<void> {
     this.applied = next
+  }
+}
+
+/**
+ * What a browser makes when a remote offer arrives with an m-line on it.
+ *
+ * The guest's microphone goes onto this rather than onto a transceiver of
+ * their own making, which is the whole of `attach`: the far end is expecting an
+ * answer about the m-line it sent, and a second one would be a different
+ * question from the one it asked.
+ */
+class FakeTransceiver {
+  direction = 'recvonly'
+  readonly receiver = { track: { kind: 'audio' } as MediaStreamTrack }
+  readonly sender = new FakeSender()
+  replaced: MediaStreamTrack | null = null
+  constructor() {
+    this.sender.replaceTrack = async (next: MediaStreamTrack) => {
+      this.replaced = next
+    }
   }
 }
 
@@ -40,6 +65,8 @@ class FakePeerConnection {
   readonly config: RTCConfiguration
   readonly senders: FakeSender[] = []
   readonly transceivers: { kind: string; init?: RTCRtpTransceiverInit }[] = []
+  /** What `getTransceivers` answers with: what an offer created, if anything. */
+  readonly negotiated: FakeTransceiver[] = []
   readonly added: { track: MediaStreamTrack; stream: MediaStream }[] = []
   readonly candidates: RTCIceCandidateInit[] = []
   local: RTCSessionDescriptionInit | null = null
@@ -81,6 +108,15 @@ class FakePeerConnection {
 
   async setRemoteDescription(description: RTCSessionDescriptionInit): Promise<void> {
     this.remote = description
+    // A remote offer brings an m-line with it, and a browser makes a
+    // transceiver for it. That is the one the answerer has to use.
+    if (description.type === 'offer' && this.negotiated.length === 0) {
+      this.negotiated.push(new FakeTransceiver())
+    }
+  }
+
+  getTransceivers(): FakeTransceiver[] {
+    return this.negotiated
   }
 
   async addIceCandidate(candidate: RTCIceCandidateInit): Promise<void> {
@@ -162,7 +198,10 @@ describe('offerVoice: the decks’ end', () => {
     const { sent, send } = collector()
     offerVoice(track(), { iceServers: [], send })
     await settle()
-    expect(sent).toEqual([{ payload: { kind: 'offer', sdp: 'the-offer' } }])
+    // Tagged, without the caller having said so: every payload has to name the
+    // connection it came from, and a candidate that forgot would be dropped by
+    // whichever link caught it.
+    expect(sent).toEqual([{ payload: { kind: 'offer', sdp: 'the-offer', channel: 'listen' } }])
   })
 
   it('sends the microphone it was handed', async () => {
@@ -193,8 +232,8 @@ describe('offerVoice: the decks’ end', () => {
     FakePeerConnection.built[0]!.emitCandidate(null)
 
     expect(sent.slice(1)).toEqual([
-      { payload: { kind: 'ice', candidate: { candidate: 'one' } } },
-      { payload: { kind: 'ice', candidate: { candidate: 'two' } } },
+      { payload: { kind: 'ice', candidate: { candidate: 'one' }, channel: 'listen' } },
+      { payload: { kind: 'ice', candidate: { candidate: 'two' }, channel: 'listen' } },
     ])
   })
 
@@ -246,7 +285,7 @@ describe('receiveVoice: a listener’s end', () => {
     await link.accept({ kind: 'offer', sdp: 'the-offer' })
 
     expect(FakePeerConnection.built[0]!.remote).toEqual({ type: 'offer', sdp: 'the-offer' })
-    expect(sent).toEqual([{ payload: { kind: 'answer', sdp: 'the-answer' } }])
+    expect(sent).toEqual([{ payload: { kind: 'answer', sdp: 'the-answer', channel: 'listen' } }])
   })
 
   it('hands over the voice when one arrives', async () => {
@@ -264,6 +303,85 @@ describe('receiveVoice: a listener’s end', () => {
     const link = receiveVoice({ iceServers: [], send: collector().send, onStream: () => undefined })
     await expect(link.accept({ kind: 'ice', candidate: { candidate: 'early' } })).resolves.toBeUndefined()
     expect(FakePeerConnection.built[0]!.candidates).toEqual([{ candidate: 'early' }])
+  })
+})
+
+describe('the talk channel', () => {
+  it('has the decks offer, even for a voice coming the other way', async () => {
+    const { sent, send } = collector()
+    inviteVoice({ iceServers: [], channel: 'talk', send, onStream: () => undefined })
+    await settle()
+
+    // `recvonly` — *I would like to receive* — rather than the guest offering.
+    // The sentence the whole module rests on is that the decks always offer and
+    // a listener never does, and it is what buys the absence of glare: two
+    // peers can only collide if both of them can start.
+    expect(FakePeerConnection.built[0]!.transceivers).toEqual([
+      { kind: 'audio', init: { direction: 'recvonly' } },
+    ])
+    expect(sent).toEqual([{ payload: { kind: 'offer', sdp: 'the-offer', channel: 'talk' } }])
+  })
+
+  it('answers with a microphone on the transceiver the offer made', async () => {
+    const { sent, send } = collector()
+    const mic = track()
+    const link = sendVoice(mic, { iceServers: [], channel: 'talk', send })
+
+    await link.accept({ kind: 'offer', sdp: 'the-offer', channel: 'talk' })
+
+    const pc = FakePeerConnection.built[0]!
+    // Not `addTrack`, which would make a second m-line the far end never asked
+    // about, and an answer to a different question.
+    expect(pc.added).toEqual([])
+    expect(pc.getTransceivers()[0]!.replaced).toBe(mic)
+    // `sendonly`, because a `recvonly` offer is answered `inactive` by default
+    // when the answerer has nothing to send — and having something to send is
+    // exactly what has changed.
+    expect(pc.getTransceivers()[0]!.direction).toBe('sendonly')
+    expect(sent).toEqual([{ payload: { kind: 'answer', sdp: 'the-answer', channel: 'talk' } }])
+  })
+
+  it('spends more on the one connection that feeds a re-encode', async () => {
+    const link = sendVoice(track(), { iceServers: [], channel: 'talk', send: collector().send })
+    await link.accept({ kind: 'offer', sdp: 'the-offer', channel: 'talk' })
+
+    // Higher than `VOICE_BITRATE`, which is what it is because it is multiplied
+    // by thirty. This is one connection, and whatever arrives on it is decoded,
+    // mixed and encoded again into every listener's stream.
+    expect(GUEST_BITRATE).toBeGreaterThan(VOICE_BITRATE)
+    const applied = FakePeerConnection.built[0]!.getTransceivers()[0]!.sender.applied
+    expect(applied?.encodings?.[0]?.maxBitrate).toBe(GUEST_BITRATE)
+  })
+
+  it('tags its candidates, so they reach the right one of two connections', async () => {
+    const { sent, send } = collector()
+    inviteVoice({ iceServers: [], channel: 'talk', send, onStream: () => undefined })
+    await settle()
+    FakePeerConnection.built[0]!.emitCandidate({ candidate: 'one' })
+
+    // Both connections to a guest carry signalling from the same socket id, so
+    // an untagged candidate is indistinguishable from the other connection's
+    // and is silently discarded by whichever link catches it.
+    expect(sent.slice(1)).toEqual([
+      { payload: { kind: 'ice', candidate: { candidate: 'one' }, channel: 'talk' } },
+    ])
+  })
+})
+
+describe('which connection a payload belongs to', () => {
+  it('reads an absent channel as the one that existed first', () => {
+    // Optional on the wire, so nothing already out there changes meaning.
+    expect(channelOf({ kind: 'offer', sdp: '' })).toBe('listen')
+    expect(channelOf({ kind: 'offer', sdp: '', channel: 'talk' })).toBe('talk')
+  })
+
+  it('refuses a channel it does not know', () => {
+    expect(isSignalPayload({ kind: 'offer', sdp: 'x', channel: 'talk' })).toBe(true)
+    expect(isSignalPayload({ kind: 'offer', sdp: 'x', channel: 'listen' })).toBe(true)
+    expect(isSignalPayload({ kind: 'offer', sdp: 'x' })).toBe(true)
+    // A client this one does not understand. Guessing which of two connections
+    // it meant would be worse than dropping it.
+    expect(isSignalPayload({ kind: 'offer', sdp: 'x', channel: 'both' })).toBe(false)
   })
 })
 

@@ -2933,6 +2933,56 @@ h2 {
   color: var(--fg-dim);
 }
 
+/* Whether you can hear the guest, above the list of who can hear you.
+
+   One of it and thirty of those, which is why it is above rather than in the
+   list: two connections, two failures, two fixes, and a console that reported
+   one number would send somebody looking at the wrong end of a call. */
+.guest {
+  margin: 12px 16px 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--raised);
+}
+
+.guest__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  line-height: 16.5px;
+}
+
+.guest__who {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-dim);
+}
+
+.guest__state {
+  color: var(--faint);
+}
+
+.guest__cue {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 16.5px;
+}
+
+.guest__note {
+  margin: 6px 0 0;
+  color: var(--warn);
+  font-size: 11px;
+  line-height: 16.5px;
+}
+
 /* Who can actually hear the mic.
  *
  * Quiet by default, because the answer is usually "everyone" and a panel that

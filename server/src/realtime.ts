@@ -609,6 +609,21 @@ export function attachRealtime({
       send(socket, errorMessage('not_the_decks', 'listeners may only signal the decks', 'signal'))
       return
     }
+    // A listener may carry a negotiation and may not start one. The decks
+    // always offer — even for a guest's microphone, which travels on a
+    // connection the decks offered `recvonly` and the guest answered — so an
+    // offer from this direction is either a client that has misunderstood or
+    // one trying to put audio in front of whoever runs the station.
+    //
+    // A peek, not a parse: `kindOf` reads one string field and says `unknown`
+    // otherwise, which is all this needs and is the most the station will ever
+    // know about SDP. The console refuses these too; this is the half that does
+    // not depend on the console being the version that does.
+    if (!fromDecks && kindOf(payload) === 'offer') {
+      log?.warn({ from: senderId, to }, 'refusing an offer: listeners do not start negotiations')
+      send(socket, errorMessage('may_not_offer', 'only the decks may offer a connection', 'signal'))
+      return
+    }
     // The decks are exempt from pacing, and this is the one place that matters:
     // fanning a voice out to a full room is one offer and a dribble of
     // candidates per listener, all at once, which is exactly the shape a bucket

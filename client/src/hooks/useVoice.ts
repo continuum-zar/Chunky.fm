@@ -2,7 +2,15 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ServerMessage } from '../lib/protocol.js'
 import type { PeerHealth, PeerState } from '../lib/reach.js'
 import type { StationConnection } from '../lib/station.js'
-import { type PeerLink, isSignalPayload, offerVoice, receiveVoice } from '../lib/webrtc.js'
+import {
+  type PeerLink,
+  channelOf,
+  inviteVoice,
+  isSignalPayload,
+  offerVoice,
+  receiveVoice,
+  sendVoice,
+} from '../lib/webrtc.js'
 
 /**
  * The voice, both ends of it.
@@ -97,11 +105,20 @@ interface BroadcastOptions {
   /** Who to send it to: the roster, minus this console. */
   targets: number[]
   iceServers: RTCIceServer[] | null
+  /**
+   * Whoever has the floor, or null. The second connection to exactly one of the
+   * targets, going the other way.
+   */
+  speaker: number | null
+  /** A guest's voice, once one is arriving. Null takes it away again. */
+  onGuest(stream: MediaStream | null): void
 }
 
 export interface VoiceBroadcast {
   handleMessage(message: ServerMessage): void
   peers: PeerState[]
+  /** How the connection carrying the guest's voice is doing, if there is one. */
+  guest: PeerHealth | null
 }
 
 /**
@@ -122,8 +139,25 @@ export function useVoiceBroadcast({
   track,
   targets,
   iceServers,
+  speaker,
+  onGuest,
 }: BroadcastOptions): VoiceBroadcast {
   const links = useRef(new Map<number, PeerLink>())
+  /**
+   * The one connection that goes the other way.
+   *
+   * Kept apart from `links` rather than in it under a compound key, because it
+   * is not the same kind of thing: `links` is a fan-out that follows the roster
+   * and this is a single connection that follows the floor. Sharing a map would
+   * have the roster diff tearing down a guest's microphone every time somebody
+   * else left the room.
+   */
+  const talk = useRef<{ id: number; link: PeerLink } | null>(null)
+  const [guest, setGuest] = useState<PeerHealth | null>(null)
+  // Read through a ref so the effect below is not rebuilt — and the guest's
+  // connection not torn down — every time the console re-renders.
+  const guestStream = useRef(onGuest)
+  guestStream.current = onGuest
   const attempts = useRef(new Map<number, number>())
   const retries = useRef(new Set<number>())
   const [peers, setPeers] = useState<PeerState[]>([])
@@ -241,17 +275,72 @@ export function useVoiceBroadcast({
     }
   }, [])
 
+  /**
+   * The talk channel: one connection, to whoever has the floor.
+   *
+   * Deliberately independent of the fan-out above. A guest's microphone must
+   * not be renegotiated because somebody else joined the room, and their
+   * downlink must not be disturbed because their uplink failed — those are two
+   * failures with different causes, and the console's job is to tell them
+   * apart rather than to bundle them.
+   */
+  useEffect(() => {
+    const open = talk.current
+    const wanted = connection && iceServers !== null && speaker !== null && speaker !== me
+    if (open && (!wanted || open.id !== speaker)) {
+      open.link.close()
+      talk.current = null
+      setGuest(null)
+      guestStream.current(null)
+    }
+    if (!wanted || talk.current) return
+
+    const id = speaker as number
+    setGuest('new')
+    talk.current = {
+      id,
+      link: inviteVoice({
+        iceServers,
+        channel: 'talk',
+        label: `from listener ${id}`,
+        send: (payload) => connection.send({ type: 'signal', to: id, payload }),
+        onStream: (stream) => guestStream.current(stream),
+        onState: (state) => {
+          setGuest(state)
+          // `disconnected` is often a blip ICE recovers from on its own, so
+          // only the states it does not come back from take the voice away.
+          if (state === 'failed' || state === 'closed') guestStream.current(null)
+        },
+      }),
+    }
+  }, [connection, iceServers, speaker, me])
+
+  // Leaving the console takes the guest's connection with it, as it does the
+  // room's. Its own effect because it must not run on a speaker changing.
+  useEffect(() => {
+    const open = talk
+    return () => {
+      open.current?.link.close()
+      open.current = null
+    }
+  }, [])
+
   const handleMessage = useCallback((message: ServerMessage) => {
     if (message.type !== 'signal') return
     if (!isSignalPayload(message.payload)) return
-    // Answers and candidates only. An offer arriving here would be a listener
-    // trying to send the decks a microphone, which nothing in this station does
-    // and which the console has no business accepting.
+    // Answers and candidates only, on either channel. An offer arriving here
+    // would be a listener trying to start something, which nothing in this
+    // station does — the decks always offer — and which the console has no
+    // business accepting. The station refuses to relay one too; see `signal`.
     if (message.payload.kind === 'offer') return
+    if (channelOf(message.payload) === 'talk') {
+      if (talk.current?.id === message.from) void talk.current.link.accept(message.payload)
+      return
+    }
     void links.current.get(message.from)?.accept(message.payload)
   }, [])
 
-  return { handleMessage, peers }
+  return { handleMessage, peers, guest }
 }
 
 interface ReceiverOptions {
@@ -262,12 +351,24 @@ interface ReceiverOptions {
   iceServers: RTCIceServer[] | null
   /** Where the voice goes. Null takes it away again. */
   onStream(stream: MediaStream | null): void
+  /**
+   * This listener's own microphone, for the one of them who has been brought
+   * up. Null for everybody else, which is almost everybody.
+   *
+   * Its presence is what decides whether a talk-channel offer is answered at
+   * all: a page with nothing to send has nothing to say to one, and answering
+   * with an empty transceiver would leave the console holding a connection that
+   * establishes perfectly and carries silence.
+   */
+  talkTrack?: MediaStreamTrack | null
 }
 
 export interface VoiceReceiver {
   handleMessage(message: ServerMessage): void
   /** Whether a voice is actually arriving, as opposed to being announced. */
   connected: boolean
+  /** How this listener's own microphone is getting to the decks, if at all. */
+  talking: RTCPeerConnectionState | null
 }
 
 /**
@@ -283,9 +384,12 @@ export function useVoiceReceiver({
   active,
   iceServers,
   onStream,
+  talkTrack = null,
 }: ReceiverOptions): VoiceReceiver {
   const link = useRef<PeerLink | null>(null)
+  const talk = useRef<PeerLink | null>(null)
   const [connected, setConnected] = useState(false)
+  const [talking, setTalking] = useState<RTCPeerConnectionState | null>(null)
   /**
    * Signalling that arrived before this page could act on it.
    *
@@ -303,17 +407,31 @@ export function useVoiceReceiver({
   // Read through refs so the message handler never has to be rebuilt: it is
   // wired into the socket once, and a new identity every render would mean
   // re-registering it on every frame the station sends.
-  const held = useRef({ connection, me, active, iceServers, onStream })
+  const held = useRef({ connection, me, active, iceServers, onStream, talkTrack })
   useEffect(() => {
-    held.current = { connection, me, active, iceServers, onStream }
+    held.current = { connection, me, active, iceServers, onStream, talkTrack }
   })
 
   const drop = useCallback(() => {
     link.current?.close()
     link.current = null
+    talk.current?.close()
+    talk.current = null
     setConnected(false)
+    setTalking(null)
     held.current.onStream(null)
   }, [])
+
+  // Coming down closes the microphone's connection and leaves the other alone:
+  // somebody who has stopped talking is still listening, and tearing down their
+  // downlink would take the station away from them as a reward for it.
+  useEffect(() => {
+    if (talkTrack === null && talk.current) {
+      talk.current.close()
+      talk.current = null
+      setTalking(null)
+    }
+  }, [talkTrack])
 
   /**
    * Ends the voice, and the four things that mean it is over.
@@ -345,8 +463,29 @@ export function useVoiceReceiver({
       if (!isSignalPayload(message.payload)) return
 
       // Answers never arrive here: a listener does not offer, so the decks have
-      // nothing to answer. Anything else is a candidate for the link below.
+      // nothing to answer. Anything else is a candidate for a link below.
       if (message.payload.kind === 'answer') return
+
+      if (channelOf(message.payload) === 'talk') {
+        const { talkTrack: microphone } = held.current
+        if (message.payload.kind === 'offer') {
+          // Nothing to send means nothing to answer with. A page that answered
+          // anyway would hand the console a connection that establishes
+          // perfectly and carries silence, which is the worst shape a failure
+          // can take: healthy on every screen and inaudible in the room.
+          if (!microphone) return
+          talk.current?.close()
+          talk.current = sendVoice(microphone, {
+            iceServers: servers,
+            channel: 'talk',
+            label: `to the decks (${message.from})`,
+            send: (out) => socket.send({ type: 'signal', to: message.from, payload: out }),
+            onState: (state) => setTalking(state),
+          })
+        }
+        void talk.current?.accept(message.payload)
+        return
+      }
 
       if (message.payload.kind === 'offer') {
         // A fresh offer replaces whatever was there. The decks re-offer when
@@ -405,5 +544,5 @@ export function useVoiceReceiver({
     [ready, deliver],
   )
 
-  return { handleMessage, connected }
+  return { handleMessage, connected, talking }
 }

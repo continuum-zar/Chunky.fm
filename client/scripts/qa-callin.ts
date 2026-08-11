@@ -44,6 +44,50 @@ import {
   wait,
 } from './qa-env.js'
 
+/**
+ * Measures whatever the console ends up playing into its own headphones.
+ *
+ * Not the same instrument as `INSTRUMENT_VOICE` on a listener's page, and the
+ * difference is the point: there, a voice is heard through the graph the join
+ * click built, and the question is whether a listener can hear the decks. Here
+ * the question is whether the decks can hear a *guest*, which means measuring
+ * the console's own destination — the thing a pair of headphones is plugged
+ * into — rather than any one node on the way to it.
+ */
+const INSTRUMENT_CUE = `(() => {
+  window.__cue = null
+  var create = AudioContext.prototype.createMediaStreamSource
+  AudioContext.prototype.createMediaStreamSource = function (stream) {
+    var node = create.call(this, stream)
+    var analyser = this.createAnalyser()
+    analyser.fftSize = 1024
+    node.connect(analyser)
+    window.__cue = { analyser: analyser, samples: new Uint8Array(analyser.fftSize) }
+    return node
+  }
+  return true
+})()`
+
+/** The loudest thing the console has heard since this was last read. */
+const CUE_LEVEL = `(() => {
+  if (!window.__cue) return -1
+  var peak = 0
+  for (var i = 0; i < 40; i++) {
+    window.__cue.analyser.getByteTimeDomainData(window.__cue.samples)
+    for (var j = 0; j < window.__cue.samples.length; j++) {
+      var v = Math.abs((window.__cue.samples[j] - 128) / 128)
+      if (v > peak) peak = v
+    }
+  }
+  return peak
+})()`
+
+/**
+ * The fake device is a loud continuous tone, so a voice that is arriving reads
+ * far above this and one that is not reads far below. The gap is the test.
+ */
+const HEARD = 0.02
+
 const checks = new Checks()
 const ADMIN_URL = `${STATION_URL}#admin`
 
@@ -53,7 +97,19 @@ const ADMIN_URL = `${STATION_URL}#admin`
 const VERDICT_MS = 30_000
 
 /**
- * A caller wearing headphones, as a WAV: they say something, then nothing.
+ * A caller wearing headphones, as a WAV: two seconds of talking, four of not.
+ *
+ * The duty cycle is doing two jobs at once and both of them are load bearing.
+ * The four seconds of silence are what the sound check needs — it wants an
+ * unbroken second and a half inside a six-second budget, and it is that silence
+ * which stands in for headphones, because a caller on speakers would have the
+ * station coming back into their microphone throughout. The two seconds of tone
+ * are what there is to *measure* once they are on air.
+ *
+ * It loops, and that matters: the check takes a few seconds and the call comes
+ * after it, so a file that played once would have run out by the time anybody
+ * was listening — a guest sending real silence, which looks exactly like a
+ * broken talk channel and would have this script fail for the wrong reason.
  *
  * Mono, 48 kHz, sixteen bit, written by hand because the alternative is a
  * binary in the repository or a dependency on ffmpeg for a file that is a sine
@@ -61,8 +117,8 @@ const VERDICT_MS = 30_000
  */
 function headphonesWav(): string {
   const rate = 48_000
-  const toneS = 1.5
-  const silenceS = 8.5
+  const toneS = 2
+  const silenceS = 4
   const frames = Math.round((toneS + silenceS) * rate)
   const data = Buffer.alloc(frames * 2)
   for (let i = 0; i < Math.round(toneS * rate); i++) {
@@ -96,17 +152,19 @@ function browserWith(capture: string | null): Promise<Browser> {
     args: [
       '--use-fake-ui-for-media-stream',
       '--use-fake-device-for-media-stream',
-      // `%noloop` matters: looping the file would put the tone back every ten
-      // seconds, which is a caller who cannot stop talking rather than one on
-      // headphones.
-      ...(capture ? [`--use-file-for-fake-audio-capture=${capture}%noloop`] : []),
+      // Looping, deliberately: see `headphonesWav`. A file that played once
+      // would be exhausted by the time the call started, and a guest sending
+      // real silence is indistinguishable from a talk channel that never
+      // carried anything.
+      ...(capture ? [`--use-file-for-fake-audio-capture=${capture}`] : []),
     ],
   })
 }
 
 /** Sign the console in and leave it on the desk. */
-async function decks(browser: Browser): Promise<Page> {
+async function decks(browser: Browser, listening = false): Promise<Page> {
   const page = await browser.newPage()
+  if (listening) await page.addInitScript(INSTRUMENT_CUE)
   await page.goto(ADMIN_URL)
   await page.fill('input[type=password]', ADMIN_PASSWORD)
   await page.click('button[type=submit]')
@@ -202,13 +260,17 @@ async function onHeadphones(): Promise<void> {
     await guest.goto(STATION_URL)
     await tuneIn(guest, 'ama')
     await wait(1_500)
-    const console_ = await decks(browser)
+    const console_ = await decks(browser, true)
     await askedUp(guest, console_)
 
     await guest.click('[data-testid=sound-check]')
     const { passed, notice } = await verdict(guest)
     checks.run('they pass, and are offered a way up', passed, notice.slice(0, 72))
     if (!passed) return
+
+    // Nothing in anybody's headphones before there is a voice to put there.
+    const before = (await console_.evaluate(CUE_LEVEL)) as number
+    checks.run('the console hears nothing before they come up', before < HEARD, `peak ${before}`)
 
     await guest.click('[data-testid=go-up]')
     await wait(2_500)
@@ -235,6 +297,46 @@ async function onHeadphones(): Promise<void> {
       'a mute beside the on-air notice',
     )
 
+    // The talk channel, which is the risky half of this whole feature: the
+    // decks offered `recvonly`, the guest answered with a microphone on it, and
+    // the console is now measuring its own headphones.
+    let heard = 0
+    for (let i = 0; i < 30 && heard < HEARD; i++) {
+      heard = (await console_.evaluate(CUE_LEVEL)) as number
+      if (heard < HEARD) await wait(500)
+    }
+    checks.run('the console can hear the guest', heard >= HEARD, `peak ${heard.toFixed(4)}`)
+    checks.run(
+      'and says so beside their name',
+      ((await console_.locator('[data-testid=guest-link]').textContent()) ?? '').includes(
+        'you can hear them',
+      ),
+      (await console_.locator('[data-testid=guest-link]').getAttribute('data-state')) ?? '?',
+    )
+    // The half that is not built yet, and the reason this milestone stops here:
+    // the guest is wired to the room bus behind a fader that is shut.
+    checks.run(
+      'and the room is told, plainly, that it cannot',
+      ((await guest.locator('[data-testid=on-the-mic-detail]').textContent()) ?? '').includes(
+        'cannot hear you yet',
+      ),
+      'the guest is not being told the room can hear them',
+    )
+
+    // Muting has to reach the far end rather than only the button. Measured
+    // over a whole cycle of the capture file, so that "quiet" cannot be the
+    // silent half of it — which would pass whether or not the mute worked.
+    await guest.click('[data-testid=guest-mute]')
+    await wait(1_000)
+    let muted = 0
+    for (let i = 0; i < 14; i++) {
+      muted = Math.max(muted, (await console_.evaluate(CUE_LEVEL)) as number)
+      await wait(500)
+    }
+    checks.run('muting is heard at the other end', muted < HEARD, `peak ${muted.toFixed(4)}`)
+    await guest.click('[data-testid=guest-mute]')
+    await wait(1_000)
+
     // The headline: a caller hears the studio, not the record. Silence rather
     // than the duck depth, so there is nothing left for their own microphone
     // to pick up.
@@ -252,6 +354,8 @@ async function onHeadphones(): Promise<void> {
       (await console_.locator('[data-testid=floor-speaker]').count()) === 0,
       'the floor is empty again',
     )
+    const gone = (await console_.evaluate(CUE_LEVEL)) as number
+    checks.run('and takes their voice with it', gone < HEARD, `peak ${gone.toFixed(4)}`)
     // Back to the room's duck rather than to full, and that is the rule from
     // the floor showing through: standing a guest down does not shut the mic,
     // because whoever runs the decks nearly always says something after them.
