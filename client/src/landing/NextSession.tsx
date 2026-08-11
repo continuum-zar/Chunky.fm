@@ -48,6 +48,7 @@ export function NextSession() {
   if (!isUpcoming(next, Date.now())) return null
 
   const art = posterUrl(next)
+  const when = nextSessionLabel(next.startsAt, Date.now())
 
   return (
     <section className="upcoming" id="next-session">
@@ -55,12 +56,18 @@ export function NextSession() {
         <h2 className="section__title">The next one</h2>
       </div>
 
-      {art && <img className="upcoming__poster" src={art} alt="" />}
+      {/* The one image on this page that is carrying information rather than
+          decorating: it is the announcement, drawn by whoever is running the
+          session, and it is often the only place the theme is written down. An
+          empty alt on it told a screen reader there was nothing there. The date
+          is repeated from the line below because the poster is what a sighted
+          reader reads first, and the alt has to stand where the picture does. */}
+      {art && (
+        <img className="upcoming__poster" src={art} alt={`Poster for the next session, ${when}`} />
+      )}
 
       <p className="upcoming__when">
-        <time dateTime={new Date(next.startsAt).toISOString()}>
-          {nextSessionLabel(next.startsAt, Date.now())}
-        </time>
+        <time dateTime={new Date(next.startsAt).toISOString()}>{when}</time>
       </p>
       {/* Not "tune in now": the station is not on, and a button that opened a
           dark room would be the page overselling. Somebody who presses this is

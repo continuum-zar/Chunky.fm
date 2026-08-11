@@ -71,16 +71,22 @@ function robots(base: string): string {
 /**
  * Two URLs, and it is not for discovery.
  *
- * Nothing here needs finding: there are two pages and one of them is disallowed
- * above. What a sitemap is for at this size is `lastmod` — the one way to tell
- * a crawler that the page it read six weeks ago has changed, without waiting
- * for it to come back and find out.
+ * Nothing here needs finding: there are three pages and one of them is
+ * disallowed above. What a sitemap is for at this size is `lastmod` — the one
+ * way to tell a crawler that the page it read six weeks ago has changed,
+ * without waiting for it to come back and find out.
+ *
+ * `/how-it-works` is `monthly` because it describes a mechanism rather than an
+ * evening: it changes when the clock code changes, which is rarely, and saying
+ * `weekly` about a page that does not move is how a sitemap teaches a crawler
+ * to stop believing it.
  */
 function sitemap(base: string): string {
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
     `  <url><loc>${base}/</loc><changefreq>weekly</changefreq><priority>1.0</priority></url>`,
+    `  <url><loc>${base}/how-it-works</loc><changefreq>monthly</changefreq><priority>0.8</priority></url>`,
     '</urlset>',
     '',
   ].join('\n')
@@ -117,6 +123,7 @@ they arrive and it is kept in their own browser. Listening is free.
 ## Pages
 
 - [The station, and what it is](${base}/): what chunky.fm is, why it exists, and when the next session is.
+- [How it works](${base}/how-it-works): how every listener is held inside the same second — the clock offset, the playback-rate correction — and the questions people ask before turning up.
 - [Tune in](${base}/listen): the station itself. An application; there is nothing to read here.
 
 ## Notes

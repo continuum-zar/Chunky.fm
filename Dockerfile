@@ -21,10 +21,22 @@ RUN npm ci
 # `npm run build` typechecks before it bundles, and client/tsconfig.json takes in
 # test/ and scripts/ as well as src/, so they all have to be here or tsc fails
 # on files it was told to include but cannot find.
-COPY client/tsconfig.json client/vite.config.ts client/index.html client/landing.html ./
+COPY client/tsconfig.json client/vite.config.ts ./
+COPY client/index.html client/landing.html client/how-it-works.html ./
 COPY client/src ./src
 COPY client/test ./test
 COPY client/scripts ./scripts
+# The unhashed files that answer on their own name: the favicon, the touch icon,
+# the card an unfurler fetches, and the 404 page. Vite copies public/ into the
+# build output verbatim.
+#
+# This was missing, and nothing failed: the build succeeded, the image shipped,
+# and `/og.png` was answered by the app-shell fallback with a page of HTML and a
+# 200 — so every link to this station unfurled as a grey rectangle and no
+# favicon ever loaded. `loadClientBundle` treats these as optional, which is
+# right (a station should not refuse to boot over a picture) and is also what
+# let the omission go unnoticed. See routes/client.ts.
+COPY client/public ./public
 RUN npm run build
 
 # ---- the server --------------------------------------------------------------

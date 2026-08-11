@@ -14,14 +14,18 @@
  * drifts in one of them is a difference nobody notices until whichever
  * environment holds the odd copy is the one in front of a listener. The rules:
  *
- *   /            the landing page, the document describing the station, which
- *                has to be able to speak on the days the station's own bundle
- *                would have nothing to say
- *   /?k=<key>    an invite, sent on to the station with the key intact
- *   /welcome     where the landing page used to live
+ *   /                   the landing page, the document describing the station,
+ *                       which has to be able to speak on the days the station's
+ *                       own bundle would have nothing to say
+ *   /?k=<key>           an invite, sent on to the station with the key intact
+ *   /welcome            where the landing page used to live
+ *   /how-it-works       the page explaining how the station does what it claims
+ *   /*.html             the documents' own filenames, sent to the address the
+ *                       canonical links and the sitemap actually name
  *
- * `/listen` needs no rule anywhere: an unknown path is answered with the
- * station in all three, which is exactly what it is.
+ * `/listen` and `/admin` are the station, and they are now named rather than
+ * caught by a fallback — see `isStationPath`, and the note on it about why an
+ * unknown path stopped being answered with the station.
  */
 
 /**
@@ -37,8 +41,13 @@ export type Doorway =
   | { kind: 'redirect'; status: 301 | 302; location: string }
   /** The page in front of the station. */
   | { kind: 'landing' }
+  /** The page explaining how it works. Prose; no bundle behind it. */
+  | { kind: 'how' }
   /** Not the doorway's business: a route, an asset, or the app itself. */
   | { kind: 'pass' }
+
+/** The address of the explaining page, spelled the same in all four copies. */
+export const HOW_PATH = '/how-it-works'
 
 /**
  * Where a request at the front door goes.
@@ -57,6 +66,26 @@ export function doorway(url: string): Doorway {
 
   if (path === '/welcome') {
     return { kind: 'redirect', status: 301, location: '/' }
+  }
+
+  if (path === HOW_PATH) {
+    return { kind: 'how' }
+  }
+
+  // The documents' own filenames. Every address that matters names them without
+  // the extension — the canonical links, the sitemap, every link the pages draw
+  // — so the filename is a second address for a page that already has one, and
+  // a page reachable at two addresses is two pages to a crawler. Sent to the
+  // one address rather than merely canonicalised away, so there is only ever
+  // one to canonicalise.
+  if (path === '/landing.html') {
+    return { kind: 'redirect', status: 301, location: '/' }
+  }
+  if (path === '/how-it-works.html') {
+    return { kind: 'redirect', status: 301, location: HOW_PATH }
+  }
+  if (path === '/index.html') {
+    return { kind: 'redirect', status: 301, location: '/listen' }
   }
 
   if (path === '/') {
@@ -86,6 +115,24 @@ export function doorway(url: string): Doorway {
  */
 export function isServerPath(path: string): boolean {
   return path === '/health' || path === '/ws' || path.startsWith('/api/') || isCrawlPath(path)
+}
+
+/**
+ * The paths that are the station, named rather than assumed.
+ *
+ * The station is one document that decides what to show from the fragment, so
+ * `/listen`, `/listen#chat` and the `/admin` path the client still honours are
+ * all the same document — and the fragment never reaches the server, so there
+ * are exactly two paths to name.
+ *
+ * They used to need no naming: an unknown path was answered with the station.
+ * That is a soft 404 — every typo answered with a page and a 200, which tells a
+ * crawler that `/whatevr` is a real page and offers it as many duplicates of
+ * the station as anybody cares to invent. Two paths is a short enough list to
+ * write down, so it is written down, and everything else is told no.
+ */
+export function isStationPath(path: string): boolean {
+  return path === '/listen' || path === '/admin'
 }
 
 /**

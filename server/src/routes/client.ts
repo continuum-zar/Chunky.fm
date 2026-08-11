@@ -29,6 +29,17 @@ export interface ClientBundle {
   index: Buffer
   /** The page in front of it. Vite's `landing.html` entry. */
   landing: Buffer
+  /** How it works. Vite's `how-it-works.html` entry; prose, and no bundle. */
+  how: Buffer
+  /**
+   * What an address that is nothing gets, or null if the build predates it.
+   *
+   * Optional where the three documents above are required, and for the same
+   * reason the favicon is: a station that cannot find its 404 page should say
+   * so in JSON and stay on the air, not refuse to boot. A missing *document* is
+   * a build that shipped without its client, which is a different kind of wrong.
+   */
+  notFound: Buffer | null
   /**
    * The handful of files that have to answer on their own name.
    *
@@ -69,7 +80,19 @@ export async function loadClientBundle(clientDir: string): Promise<ClientBundle>
       )
     }
   }
-  const [index, landing] = await Promise.all([read('index.html'), read('landing.html')])
+  const [index, landing, how] = await Promise.all([
+    read('index.html'),
+    read('landing.html'),
+    read('how-it-works.html'),
+  ])
+
+  // See `notFound` above for why this one is allowed to be absent.
+  let notFound: Buffer | null = null
+  try {
+    notFound = await fs.readFile(path.join(clientDir, '404.html'))
+  } catch {
+    // A build from before the page existed.
+  }
 
   // Optional, unlike the documents above, and deliberately: a station with no
   // favicon is a station with no favicon, and refusing to boot over one would
@@ -86,7 +109,7 @@ export async function loadClientBundle(clientDir: string): Promise<ClientBundle>
     }),
   )
 
-  return { index, landing, root }
+  return { index, landing, how, notFound, root }
 }
 
 /**
@@ -125,6 +148,9 @@ export function doorwayHook(bundle: ClientBundle) {
         return
       case 'landing':
         void sendDocument(reply, bundle.landing)
+        return
+      case 'how':
+        void sendDocument(reply, bundle.how)
         return
       case 'pass':
         return done()

@@ -21,7 +21,24 @@ const ORIGIN = (process.env.PUBLIC_ORIGIN ?? 'https://chunkyfm-production.up.rai
 )
 
 /**
- * Substitutes `%ORIGIN%` in both documents.
+ * When this build was cut, for the `dateModified` in the landing page's schema.
+ *
+ * The one thing a crawler has to go on for whether what it read six weeks ago
+ * still stands. It is the build rather than the last edit to the copy, which is
+ * a slight overstatement — a build that changed nothing still moves it — but it
+ * is the honest end of the two options available. The alternative is a date
+ * typed into the markup by hand, which is right on the day it is written and
+ * quietly wrong every day after.
+ *
+ * `SOURCE_DATE_EPOCH` is honoured because it costs one line and it is the
+ * convention for making a build reproducible.
+ */
+const BUILT = new Date(
+  process.env.SOURCE_DATE_EPOCH ? Number(process.env.SOURCE_DATE_EPOCH) * 1000 : Date.now(),
+).toISOString()
+
+/**
+ * Substitutes `%ORIGIN%` and `%BUILT%` in both documents.
  *
  * Vite has its own `%VITE_*%` replacement for HTML, and it is deliberately not
  * used: it reads from a `.env` file that would have to exist, and a build
@@ -34,7 +51,7 @@ function origin(): Plugin {
     name: 'chunky-origin',
     transformIndexHtml: {
       order: 'pre',
-      handler: (html) => html.replaceAll('%ORIGIN%', ORIGIN),
+      handler: (html) => html.replaceAll('%ORIGIN%', ORIGIN).replaceAll('%BUILT%', BUILT),
     },
   }
 }
@@ -48,14 +65,25 @@ function origin(): Plugin {
  * be what happens in production, or the first place anyone notices a difference
  * is production. Three rules, and they are the same three:
  *
- *   /            the landing page, rewritten rather than redirected so the
- *                station's bare address stays bare
- *   /?k=<key>    an invite, sent on to the station with the key intact
- *   /welcome     where the landing page used to be
+ *   /               the landing page, rewritten rather than redirected so the
+ *                   station's bare address stays bare
+ *   /?k=<key>       an invite, sent on to the station with the key intact
+ *   /welcome        where the landing page used to be
+ *   /how-it-works   the page that explains the station, same rewrite as `/`:
+ *                   the address a link points at has no `.html` on the end of it
  *
- * `/listen` needs no rule in either place: Vite's SPA fallback and nginx's
- * `try_files … /index.html` both already answer an unknown path with the
- * station, which is exactly what it is.
+ * `/listen` needs no rule in either place: Vite's SPA fallback answers it with
+ * the station, and nginx names it outright.
+ *
+ * The fourth rule is the one place the doors are deliberately allowed to
+ * differ. nginx answers an address that is nothing with a 404 (see the
+ * `error_page` note in nginx.conf — a 200 on every typo is a soft 404, and the
+ * whole reason for it was to reach `/listen`, which is now named). Vite goes on
+ * falling back to the station, because the same strictness here would mean
+ * listing every path the dev server invents — `/@vite/client`, `/src/…`,
+ * `/node_modules/.vite/…` — and getting that list wrong breaks the reload, not
+ * a search result. Nothing crawls a dev server, and the difference only shows
+ * on addresses that were never real.
  */
 function doorway(): Plugin {
   // Kept in step with INVITE_PARAM in src/lib/invite.ts by hand, because this file is
@@ -72,6 +100,12 @@ function doorway(): Plugin {
       res.statusCode = 301
       res.setHeader('location', '/')
       res.end()
+      return
+    }
+
+    if (path === '/how-it-works') {
+      req.url = query === undefined ? '/how-it-works.html' : `/how-it-works.html?${query}`
+      next()
       return
     }
 
@@ -111,6 +145,10 @@ export default defineConfig({
       input: {
         station: 'index.html',
         landing: 'landing.html',
+        // No script tag on this one, and it is still an input rather than a
+        // file in public/: it needs `%ORIGIN%` and `%BUILT%` substituted, and
+        // public/ is copied byte for byte without going near a plugin.
+        how: 'how-it-works.html',
       },
     },
   },

@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Not a page · chunky.fm</title>
+
+    <!-- What an address that isn't anything answers with.
+         Served by nginx's `error_page 404`, with a 404 on it — see nginx.conf.
+         Until this existed, every wrong address was answered with the station
+         and a 200, which is a lie told to a crawler as much as to a reader.
+
+         Plain HTML on purpose. It carries no bundle, no fonts and no origin
+         substitution, so it is the one document here that is true even when
+         the build is broken. The type stack below is the same fallback the
+         station falls back to; matching it exactly would mean loading the
+         faces, and this page is not worth a font download. -->
+    <meta name="robots" content="noindex, follow" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="theme-color" content="#0a0a0a" />
+
+    <style>
+      html {
+        color-scheme: dark;
+      }
+      body {
+        margin: 0;
+        background: #0a0a0a;
+        color: #f2f2f2;
+        font-family:
+          ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      }
+      .gone {
+        max-width: 34rem;
+        margin: 0 auto;
+        padding: 18vh 1.5rem 6rem;
+      }
+      .gone h1 {
+        margin: 0 0 1.5rem;
+        font-size: clamp(1.75rem, 5vw, 2.75rem);
+        line-height: 1.15;
+        letter-spacing: -0.02em;
+      }
+      .gone p {
+        margin: 0 0 1.25rem;
+        font-size: 1rem;
+        line-height: 1.7;
+        color: #b8b8b8;
+      }
+      .gone a {
+        color: inherit;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="gone">
+      <h1>There's nothing at this address.</h1>
+
+      <p>
+        Which is not the same as the station being off air. chunky.fm has two pages: the one that
+        says what it is, and the station itself.
+      </p>
+
+      <p>
+        <a href="/">What chunky.fm is</a> · <a href="/listen">Tune in</a>
+      </p>
+
+      <p>
+        If you followed a link with a key in it and landed here, the key belongs on the front door —
+        the address should end in <code>/?k=</code> and then the key.
+      </p>
+    </main>
+  </body>
+</html>

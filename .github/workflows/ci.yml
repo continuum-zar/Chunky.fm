@@ -161,6 +161,62 @@ jobs:
         run: |
           curl -fsS -L "http://localhost:$WEB_PORT/welcome" | grep -q '/assets/landing-'
 
+      # The third document, and the one with no bundle behind it. Checked for
+      # what is *in* it rather than for a 200: the failure this catches is the
+      # rule missing, in which case the address is answered by the fallback
+      # below, and a fallback answering with a page is the whole problem.
+      - name: /how-it-works is the page that explains it
+        run: |
+          page=$(curl -fsS "http://localhost:$WEB_PORT/how-it-works")
+          grep -q 'How chunky.fm works' <<<"$page" || { echo "not the explaining page"; exit 1; }
+          grep -q 'application/ld+json' <<<"$page" || { echo "no schema on it"; exit 1; }
+
+      # An address that is nothing must say so, with a status that says so. This
+      # was `try_files … /index.html` for a long time: every typo answered with
+      # the station and a 200, which is a soft 404 — a crawler told that
+      # /whatevr is a real page, and offered as many duplicate stations as
+      # anybody cares to invent.
+      - name: An address that is nothing is a 404, not the station
+        run: |
+          for path in /nope /listen/extra /how-it-works/extra; do
+            code=$(curl -s -o body.html -w '%{http_code}' "http://localhost:$WEB_PORT$path")
+            test "$code" = 404 || { echo "$path answered $code, not 404"; exit 1; }
+            grep -q 'nothing at this address' body.html || {
+              echo "$path did not get the 404 page"; exit 1
+            }
+            # `if` rather than `grep … && { exit 1; }`: a grep that finds
+            # nothing is the passing case here, and as the last command of an
+            # && list its non-zero status would fail the step under `set -e`.
+            if grep -q '/assets/station-' body.html; then
+              echo "$path was answered with the station"; exit 1
+            fi
+          done
+          # And the documents' own filenames go to the one address they have.
+          # `tr -d '\r'` because header lines arrive CRLF-terminated, so a `$`
+          # anchor never matches — and without the anchor every /… would pass.
+          loc=$(curl -fsS -o /dev/null -D - "http://localhost:$WEB_PORT/landing.html" \
+                | tr -d '\r' | grep -i '^location:' | head -1)
+          test "$loc" = "location: /" || { echo "/landing.html went to '$loc'"; exit 1; }
+
+      # The unhashed files that answer on their own name. These are the reason
+      # this step exists: they live in client/public, they are copied into the
+      # image by a line of the Dockerfile that has nothing else depending on it,
+      # and when that line was missing everything below still passed — the build
+      # succeeded and /og.png was answered by the app-shell fallback with a page
+      # of HTML and a 200, so every link to the station unfurled as a grey
+      # rectangle. Checking the content type is what catches that; checking for
+      # a 200 is what did not.
+      - name: The card and the icons are the files, not a page
+        run: |
+          for pair in "og.png:image/png" "favicon.svg:image/svg+xml" "apple-touch-icon.png:image/png"; do
+            path=${pair%%:*}; want=${pair#*:}
+            got=$(curl -fsS -o /dev/null -w '%{content_type}' "http://localhost:$WEB_PORT/$path")
+            case "$got" in
+              "$want"*) ;;
+              *) echo "/$path is $got, wanted $want"; exit 1 ;;
+            esac
+          done
+
       # The door is on, and it is the library it guards, not the documents. A
       # page has to load in order to redeem a code typed into it, so the two
       # checks above must keep passing without any credential at all.
@@ -270,6 +326,44 @@ jobs:
           curl -fsS -o /dev/null "http://localhost:13000$asset"
           curl -fsS -o /dev/null -D - "http://localhost:13000$asset" | grep -qi 'cache-control:.*immutable'
           curl -fsS -L http://localhost:13000/welcome | grep -q '/assets/landing-'
+
+      # The same three assertions the `stack` job makes of nginx, against the
+      # copy of the rules in lib/doorway.ts and lib/errors.ts. This is the
+      # deployment Railway runs, so it is the copy that has to be right.
+      - name: /how-it-works is the page that explains it
+        run: |
+          page=$(curl -fsS http://localhost:13000/how-it-works)
+          grep -q 'How chunky.fm works' <<<"$page" || { echo "not the explaining page"; exit 1; }
+          grep -q 'application/ld+json' <<<"$page" || { echo "no schema on it"; exit 1; }
+
+      - name: An address that is nothing is a 404, not the station
+        run: |
+          for path in /nope /listen/extra /how-it-works/extra; do
+            code=$(curl -s -o body.html -w '%{http_code}' "http://localhost:13000$path")
+            test "$code" = 404 || { echo "$path answered $code, not 404"; exit 1; }
+            grep -q 'nothing at this address' body.html || {
+              echo "$path did not get the 404 page"; exit 1
+            }
+            if grep -q '/assets/station-' body.html; then
+              echo "$path was answered with the station"; exit 1
+            fi
+          done
+          loc=$(curl -fsS -o /dev/null -D - http://localhost:13000/landing.html \
+                | tr -d '\r' | grep -i '^location:' | head -1)
+          test "$loc" = "location: /" || { echo "/landing.html went to '$loc'"; exit 1; }
+
+      # See the same step in the `stack` job: this is the one that catches
+      # client/public not reaching the image, which nothing else does.
+      - name: The card and the icons are the files, not a page
+        run: |
+          for pair in "og.png:image/png" "favicon.svg:image/svg+xml" "apple-touch-icon.png:image/png"; do
+            path=${pair%%:*}; want=${pair#*:}
+            got=$(curl -fsS -o /dev/null -w '%{content_type}' "http://localhost:13000/$path")
+            case "$got" in
+              "$want"*) ;;
+              *) echo "/$path is $got, wanted $want"; exit 1 ;;
+            esac
+          done
 
       # The failure the app-shell fallback would cause if it were not fenced off:
       # a mistyped API route answered with a page of HTML and a 200.

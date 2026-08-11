@@ -1088,14 +1088,33 @@ recognises is replaced with the same route on `/listen`. Fragments the page owns
 like `#clockwork`, name no route and are left alone. `/welcome`, where the
 landing page used to live, is a 301 to `/`.
 
-All of that lives in two places that have to agree: `nginx.conf`, and a small
-plugin in `vite.config.ts` that does the same three things for `npm run dev` and
-`vite preview`. They agree for the same reason the `/api` and `/ws` proxies do:
-the client ships unchanged, so what happens at the front door in front of a dev
-server has to be what happens in production, or the first place anyone notices a
-difference is production. `/listen` itself needs no rule in either: Vite's SPA
-fallback and nginx's `try_files … /index.html` both already answer an unknown
-path with the station, which is what it is.
+There is a third document, **`/how-it-works`** (`how-it-works.html`), and it is
+the only one with no bundle behind it at all: prose, an inline stylesheet, and a
+`FAQPage` schema. It says how the station holds everyone inside the same second
+— the clock offset, the playback-rate correction — because that is the question
+this project actually gets asked, and because a page whose whole job is to be
+read has no business waiting on the globe to say its first sentence. Its numbers
+are read off `lib/clock.ts` and `lib/drift.ts`; if those change, it is wrong
+until it changes too.
+
+An address that is none of the above is a **404**, with the `404.html` document
+on it. It used to be the station with a 200: `try_files … /index.html` on one
+side and an app-shell fallback on the other, both answering every typo with a
+page. That is a soft 404 — it tells a crawler that `/whatevr` is a real page and
+offers it as many duplicates of the station as anybody cares to invent — and the
+only reason for it was to reach `/listen`, which is now named outright along
+with `/admin`. The fragment never reaches the server, so those two are the whole
+list (`isStationPath`).
+
+All of that lives in three places that have to agree: `nginx.conf`, a small
+plugin in `vite.config.ts` that does the same for `npm run dev` and `vite
+preview`, and `server/src/lib/doorway.ts` for the single image — which is the
+one Railway runs, so it is the copy that has to be right. They agree for the
+same reason the `/api` and `/ws` proxies do: the client ships unchanged, so what
+happens at the front door in front of a dev server has to be what happens in
+production, or the first place anyone notices a difference is production. See
+[The front door exists three times](#the-front-door-exists-three-times) for the
+one rule they are allowed to differ on.
 
 The one place the station links back to it is the doorway, on the `refused`
 screen: somebody standing outside a private station is the only visitor who does
@@ -1974,11 +1993,18 @@ set to the built client, it also owns the front door.
 
 ### The front door exists three times
 
-`/`, `/?k=<key>` and `/welcome` are decided in three separate places: nginx's
-config, Vite's dev middleware, and `server/src/lib/doorway.ts`. That is a real
-cost and it is deliberate: each of the three is the only thing listening in the
-environment it serves, and none of them can import from the others (the client
-image does not contain the server directory, and vice versa).
+`/`, `/?k=<key>`, `/welcome`, `/how-it-works`, the two station paths and what
+happens to an address that is nothing are decided in three separate places:
+nginx's config, Vite's dev middleware, and `server/src/lib/doorway.ts`. That is
+a real cost and it is deliberate: each of the three is the only thing listening
+in the environment it serves, and none of them can import from the others (the
+client image does not contain the server directory, and vice versa).
+
+The one rule the three are deliberately allowed to disagree on is the last.
+nginx and the server answer an unrecognised address with the 404 document and a
+404; Vite goes on falling back to the station, because matching it there would
+mean listing every path the dev server invents for itself and getting that list
+wrong breaks the reload rather than a search result.
 
 What keeps them honest is that the compose stack and the single image are both
 driven by CI with the same assertions. If you change a rule, change it in all
