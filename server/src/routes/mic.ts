@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify'
 import type { OnAir } from '../air.js'
 import type { Config } from '../config.js'
+import type { Floor } from '../floor.js'
 import { requireAdmin } from '../lib/auth.js'
 import { MIN_DUCK, type Mic } from '../mic.js'
 
@@ -8,6 +9,8 @@ interface MicDeps {
   config: Config
   mic: Mic
   air: OnAir
+  /** Who else is on the mic, which is the one thing `close` has to know about. */
+  floor: Floor
 }
 
 interface MicBody {
@@ -41,7 +44,7 @@ const BODY_SCHEMA = {
  * on a timer. One verb for both would let a keep-alive still in flight when
  * somebody let go of the key reopen the mic behind them.
  */
-export function micRoutes({ config, mic, air }: MicDeps): FastifyPluginAsync {
+export function micRoutes({ config, mic, air, floor }: MicDeps): FastifyPluginAsync {
   return async function routes(app: FastifyInstance) {
     app.get('/api/mic', async () => mic.snapshot())
 
@@ -73,9 +76,31 @@ export function micRoutes({ config, mic, air }: MicDeps): FastifyPluginAsync {
             mic.renew()
             break
           }
-          case 'close':
+          case 'close': {
+            // Refused while somebody else is on the mic, and this is the one
+            // rule on this route that is not about the mic at all.
+            //
+            // Shutting the mic drops whoever has the floor — that wiring is
+            // what stops a room being un-ducked with a guest still talking
+            // under it, and it is what a lapsed lease uses to clear a call the
+            // console died in the middle of. But the console asks to close on
+            // an ordinary hangover, four hundred milliseconds after the talk
+            // key comes up, so without this the first thing whoever runs the
+            // decks says to their caller is also what hangs up on them.
+            //
+            // The two are different acts and now have different verbs: closing
+            // the mic ends your own break, and standing somebody down ends a
+            // call. The sweep still closes directly and is unaffected, which is
+            // what keeps a dead console from ducking the room all evening.
+            if (floor.speaker) {
+              return reply.code(409).send({
+                error: 'floor_taken',
+                message: 'somebody is on the mic; stand them down to end the call',
+              })
+            }
             mic.close()
             break
+          }
           case 'duck': {
             if (typeof request.body.duckTo !== 'number') {
               return reply

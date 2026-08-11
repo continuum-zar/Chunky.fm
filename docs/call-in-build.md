@@ -999,6 +999,47 @@ reason is worth keeping: the ordering lives inside the effect that owns the
 talk channel, so the swap happens when the connection is *built* and cannot
 race the audio that arrives on it later.
 
+## After the first evening
+
+Run with people rather than with browsers, and it hung up on the caller. Three
+bugs, and the first two were one bug wearing the other's clothes.
+
+**The talk key hung up on the caller.** Whoever runs the decks says "hello
+sipho", lets go, and four hundred milliseconds later the console asks the
+station to close the mic — which is what a hangover is for, and which drops
+whoever has the floor, because a shut mic is an un-ducked room and a guest still
+shown as up would be talking under music at full volume. That wiring was right
+and the verb was wrong: **closing the mic ends your own break, and standing
+somebody down ends a call.** They are two acts and now have two verbs. The
+station refuses a close while somebody holds the floor, and the console stops
+asking; the lease still lapses directly, which is what ends a call the console
+died in the middle of.
+
+**The console's own microphone was open for the whole of every call.** The card
+followed the station's mic state, which was the same answer as the talk key
+right up until a guest could open the mic too. Nobody decided that a caller
+being brought up should put the room the console is sitting in on the air.
+
+**And then nobody could talk to their caller at all.** Fixing the second one
+meant the talk key had to be held for the whole of a conversation — and a guest
+hears the decks through that same gain, so the likely outcome was somebody
+wondering why the person they had just invited could not hear them. Bringing
+somebody up now latches the mic, because bringing somebody up *is* the decision
+to talk to them.
+
+The QA had a hole shaped exactly like this: it placed calls and never had
+anybody speak during one. It does now, and it also measures the other direction
+— the caller hearing the decks with no key held, which is the assertion that
+would have caught all three.
+
+One thing found and not fixed, because it is a guess rather than a diagnosis: a
+console tab left hidden for more than a few minutes has its timers throttled to
+about one a minute, and the mic lease is ten seconds. That would end a call the
+same way and for a reason nobody chose. The fix is to stop leaning on a client
+timer while a call is up — the console's *socket* is better evidence it is alive,
+and the station already watches that — but it changes when a mic may lapse, so
+it wants deciding rather than sneaking in.
+
 ## What this cost, in the end
 
 | | Planned | Built |

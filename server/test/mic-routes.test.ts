@@ -39,6 +39,41 @@ describe('GET /api/mic', () => {
 })
 
 describe('POST /api/mic', () => {
+  it('refuses to close while somebody else is on the mic', async () => {
+    harness.floor.raise(7, 'sipho')
+    harness.floor.invite(7)
+    harness.floor.accept(7)
+    expect(harness.mic.live).toBe(true)
+
+    const res = await post({ action: 'close' })
+
+    // The one rule on this route that is not about the mic. Shutting it drops
+    // whoever has the floor — that wiring is what stops a room being un-ducked
+    // with a guest still talking under it — and the console asks to close on an
+    // ordinary hangover, four hundred milliseconds after the talk key comes up.
+    // Without this, the first thing anybody says to their caller is also what
+    // hangs up on them.
+    expect(res.statusCode).toBe(409)
+    expect(res.json().error).toBe('floor_taken')
+    expect(harness.mic.live).toBe(true)
+    expect(harness.floor.snapshot().speaker).toMatchObject({ id: 7 })
+  })
+
+  it('still lapses on its own while somebody is up, so a dead console ends the call', async () => {
+    harness.floor.raise(7, 'sipho')
+    harness.floor.invite(7)
+    harness.floor.accept(7)
+
+    // The refusal above is on the *route*; the sweep closes directly. If it did
+    // not, a console that died mid-call would leave the room ducked and a
+    // phantom caller on the badge for the rest of the evening.
+    harness.mic.hurry(0)
+    harness.mic.sweep()
+
+    expect(harness.mic.live).toBe(false)
+    expect(harness.floor.snapshot().speaker).toBeNull()
+  })
+
   it('is admin-only', async () => {
     for (const payload of [{ action: 'open' }, { action: 'close' }, { action: 'duck', duckTo: 0.5 }]) {
       const res = await post(payload, {})

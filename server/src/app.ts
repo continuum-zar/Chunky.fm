@@ -330,7 +330,7 @@ export async function buildApp({
   await app.register(adminRoutes({ config, signInBurst, signInRefillMs }))
   await app.register(sessionRoutes({ config, air }))
   await app.register(scheduleRoutes({ config, schedule }))
-  await app.register(micRoutes({ config, mic, air }))
+  await app.register(micRoutes({ config, mic, air, floor }))
   await app.register(floorRoutes({ config, floor, air }))
   await app.register(rtcRoutes({ config, turn }))
   await app.register(mutesRoutes({ config, mutes }))

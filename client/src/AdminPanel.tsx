@@ -960,8 +960,21 @@ function MicCard({
    */
   const setTalking = input.setTalking
   useEffect(() => {
-    setTalking(live)
-  }, [live, setTalking])
+    // Both, and each is doing a different job.
+    //
+    // `live` is the mic state as broadcast — the same value every listener was
+    // sent and ducked to — and gating on it is what stops the first word of a
+    // break landing on top of a full-volume song, a round trip before anybody's
+    // music got out of the way.
+    //
+    // `wanted` is the talk control. It used to be left out, and while nothing
+    // but this card could open the mic that was the same answer: `live` became
+    // true *because* the key went down. A guest changed that. The station now
+    // opens the mic when somebody comes up, so a console following `live` alone
+    // had an open microphone on the air for the whole of every call, whether or
+    // not anybody had touched anything.
+    setTalking(live && wanted)
+  }, [live, wanted, setTalking])
 
   /**
    * Whether *this* card is the reason the mic is open.
@@ -973,6 +986,30 @@ function MicCard({
    */
   const engaged = useRef(false)
   const hangover = useRef<number | null>(null)
+  // Read inside a timer that fires after the fact, so it has to be a ref: what
+  // matters is whether somebody is on the mic when the hangover lands, not when
+  // the key came up.
+  const guestUp = useRef(false)
+  guestUp.current = floor?.speaker != null
+
+  /**
+   * Bringing somebody up latches the mic.
+   *
+   * Because bringing somebody up *is* the decision to talk to them, and because
+   * the alternative is worse than it sounds: the guest hears the decks through
+   * the same gain the talk key opens, so a console that did not latch would
+   * leave whoever runs it holding a key for the whole of a conversation — or,
+   * far more likely, wondering why the person they just invited cannot hear
+   * them.
+   *
+   * Not un-latched when the call ends, deliberately, and for the reason
+   * standing a guest down does not shut the mic: what comes next is almost
+   * always "thanks, sipho", and cutting that off mid-sentence to be tidy would
+   * be the station tidying up over somebody talking.
+   */
+  useEffect(() => {
+    if (floor?.speaker) setLatched(true)
+  }, [floor?.speaker])
 
   // Kept in refs so the effect below runs on the press and the release, and on
   // nothing else. It is what opens and shuts the mic; re-running it because a
@@ -1000,6 +1037,14 @@ function MicCard({
     hangover.current = window.setTimeout(() => {
       hangover.current = null
       engaged.current = false
+      // Not while somebody is on the mic. Closing it drops them — that wiring
+      // is what stops a room being un-ducked with a guest still talking under
+      // it — so without this, the first thing you say to a caller is also what
+      // hangs up on them, four hundred milliseconds after you stop saying it.
+      //
+      // The station refuses it too. This is the half that keeps the console
+      // from asking, so an ordinary hangover is not a refusal on the screen.
+      if (guestUp.current) return
       handlers.current.onClose()
     }, MIC_HANGOVER_MS)
   }, [wanted])

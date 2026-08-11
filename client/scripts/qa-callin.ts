@@ -40,8 +40,11 @@ import {
   INSTRUMENT_DUCKS,
   INSTRUMENT_VOICE,
   STATION_URL,
+  TRACK_ID,
   VOICE_LEVEL,
+  goLive,
   micCommand,
+  playbackCommand,
   tuneIn,
   wait,
 } from './qa-env.js'
@@ -57,27 +60,41 @@ import {
  * into — rather than any one node on the way to it.
  */
 const INSTRUMENT_CUE = `(() => {
-  window.__cue = null
+  window.__cue = []
   var create = AudioContext.prototype.createMediaStreamSource
   AudioContext.prototype.createMediaStreamSource = function (stream) {
     var node = create.call(this, stream)
     var analyser = this.createAnalyser()
     analyser.fftSize = 1024
     node.connect(analyser)
-    window.__cue = { analyser: analyser, samples: new Uint8Array(analyser.fftSize) }
+    // Every source, not the latest: the console makes a second one the moment
+    // it opens its own microphone, and a single slot would silently stop
+    // measuring the caller and start measuring the room the console is sitting
+    // in — passing, or failing, for a reason that has nothing to do with the
+    // call.
+    window.__cue.push({ analyser: analyser, samples: new Uint8Array(analyser.fftSize) })
     return node
   }
   return true
 })()`
 
-/** The loudest thing the console has heard since this was last read. */
+/**
+ * The loudest the *caller* has been in the console's headphones.
+ *
+ * The first source rather than the loudest of them, because the console makes a
+ * second one the moment it opens its own microphone — and both ends of this
+ * script are the same fake device, so a level cannot tell them apart. The first
+ * is always the caller: a call starts before anybody here opens a microphone,
+ * and the one check that opens one is deliberately last.
+ */
 const CUE_LEVEL = `(() => {
-  if (!window.__cue) return -1
+  var each = (window.__cue || [])[0]
+  if (!each) return -1
   var peak = 0
   for (var i = 0; i < 40; i++) {
-    window.__cue.analyser.getByteTimeDomainData(window.__cue.samples)
-    for (var j = 0; j < window.__cue.samples.length; j++) {
-      var v = Math.abs((window.__cue.samples[j] - 128) / 128)
+    each.analyser.getByteTimeDomainData(each.samples)
+    for (var j = 0; j < each.samples.length; j++) {
+      var v = Math.abs((each.samples[j] - 128) / 128)
       if (v > peak) peak = v
     }
   }
@@ -338,6 +355,18 @@ async function onHeadphones(): Promise<void> {
       'the guest is left guessing',
     )
 
+    // Whoever runs the decks says something to their caller, which is the
+    // entire point of having one. Letting go of the talk key must not hang up
+    // on them: closing the mic is how you end your own break, and standing
+    // somebody down is how you end a call.
+    await console_.keyboard.press('m')
+    await wait(1_500)
+    checks.run(
+      'talking to the caller does not hang up on them',
+      (await console_.locator('[data-testid=floor-speaker]').count()) > 0,
+      'the caller is still up',
+    )
+
     // The two facts this milestone is for, measured at the two ends that can
     // tell them apart. They are asserted together because either one alone is
     // meaningless: a room that hears nothing is a broken call, and a guest who
@@ -429,6 +458,33 @@ async function onHeadphones(): Promise<void> {
         if (again < HEARD) await wait(500)
       }
       checks.run('and the room hears them again', again >= HEARD, `peak ${again.toFixed(4)}`)
+
+      // And the other direction, which is the whole point of having a caller:
+      // whoever runs the decks talking *to* them. Last of the audio checks,
+      // deliberately — the console's microphone is shut until this line, which
+      // is what made every measurement above about the caller and nothing else.
+      // Opening it earlier would put a second voice on the room bus, and the
+      // levels alone cannot tell two fake devices apart.
+      //
+      // No key is held. Bringing somebody up latches the mic, because the
+      // alternative is whoever runs the decks holding one for the whole of a
+      // conversation — or, far more likely, wondering why the person they just
+      // invited cannot hear them.
+      await console_.click('[data-testid=mic-power]')
+      let fromTheDecks = 0
+      for (let i = 0; i < 30 && fromTheDecks < HEARD; i++) {
+        fromTheDecks = (await guest.evaluate(VOICE_LEVEL)) as number
+        if (fromTheDecks < HEARD) await wait(500)
+      }
+      checks.run(
+        'and the caller can hear the decks, without a key being held',
+        fromTheDecks >= HEARD,
+        `peak ${fromTheDecks.toFixed(4)}`,
+      )
+      // Off the air again, so what is left of this scenario is about the caller
+      // going rather than about the room the console is sitting in.
+      await console_.uncheck('[data-testid=mic-latch]')
+      await wait(1_000)
     }
 
     await guest.click('[data-testid=come-down]')
@@ -541,6 +597,14 @@ async function survivesContact(): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  // On air, with a record on, and this script puts it there itself rather than
+  // assuming. The sound check is the reason: its second half is a test of
+  // whether a microphone can hear *the station*, so a run against silent decks
+  // would pass every caller regardless of what they were sitting next to.
+  await goLive()
+  await playbackCommand({ action: 'play', trackId: TRACK_ID })
+  await wait(1_000)
+
   await onSpeakers()
   await onHeadphones()
   await survivesContact()

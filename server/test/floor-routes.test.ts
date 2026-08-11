@@ -170,17 +170,33 @@ describe('POST /api/floor', () => {
       harness.floor.invite(7)
       harness.floor.accept(7)
 
-      await harness.app.inject({
+      harness.mic.close()
+
+      // A shut mic is an un-ducked room, so a guest still shown as up would be
+      // talking under music at full volume.
+      expect(harness.floor.snapshot().speaker).toBeNull()
+    })
+
+    it('but the console cannot shut it out from under a caller', async () => {
+      harness.floor.raise(7, 'sipho')
+      harness.floor.invite(7)
+      harness.floor.accept(7)
+
+      const res = await harness.app.inject({
         method: 'POST',
         url: '/api/mic',
         payload: { action: 'close' },
         headers: { cookie },
       })
 
-      // A shut mic is an un-ducked room, so a guest still shown as up would be
-      // talking under music at full volume. The commonest way this happens is
-      // not a button but the lease lapsing because the console died.
-      expect(harness.floor.snapshot().speaker).toBeNull()
+      // The rule above is what a *lapsed lease* uses to end a call the console
+      // died in the middle of. It is not what a hangover should do: the console
+      // asks to close four hundred milliseconds after the talk key comes up, so
+      // without this the first thing anybody says to their caller is also what
+      // hangs up on them. Two acts, two verbs — closing the mic ends your own
+      // break, standing somebody down ends a call. See `micRoutes`.
+      expect(res.statusCode).toBe(409)
+      expect(harness.floor.snapshot().speaker).toMatchObject({ id: 7 })
     })
 
     it('takes the guest down when the console dies mid-call', async () => {
