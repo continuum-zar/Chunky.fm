@@ -8,23 +8,6 @@ import type { SocketErrorCode } from './protocol.js'
  */
 
 /**
- * Whether a guest's voice actually travels yet.
- *
- * False, and deliberately visible rather than implied. The floor is built
- * before the voice is — the permission, the invitation, the room ducking, the
- * badge with somebody's name on it — because all of that is worth living with
- * for an evening before anything harder is committed to. What it means until
- * the talk channel exists is that somebody can be brought up, be told they are
- * up, and not be heard by anybody.
- *
- * A page that said "everyone can hear you" under those conditions would be
- * lying to the one person who cannot check. So it says the true thing instead,
- * and this constant is what turns that sentence off again. Delete it, and the
- * branch it guards, when a voice arrives.
- */
-export const VOICE_CARRIES = false
-
-/**
  * Why a hand was refused, in words, or null when the code says nothing a
  * listener can act on.
  *

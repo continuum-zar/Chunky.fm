@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { GuestVoice } from './hooks/useGuestVoice.js'
-import { VOICE_CARRIES, secondsLeft } from './lib/hand.js'
+import { secondsLeft } from './lib/hand.js'
 import type { StationConnection } from './lib/station.js'
 import { checkNotice } from './lib/sound-check.js'
 
@@ -11,6 +11,13 @@ import { checkNotice } from './lib/sound-check.js'
  * invitation is time-limited and an open microphone is the one thing on this
  * page somebody must never have to go looking for: a notice tucked inside a
  * panel behind a route is a microphone somebody forgot was open.
+ *
+ * Rendered always, and drawing nothing most of the time, which looks wasteful
+ * and is load bearing. This is where the microphone is handed back when a call
+ * ends, and a component that the page stopped rendering at that moment would be
+ * unmounted before it could notice — leaving a caller who has come down with an
+ * open capture, a recording light and a browser that thinks they are still on
+ * a station they left.
  *
  * It is also the only place either of those can be acted on. The panel beside
  * the wishes shows the same states and offers no buttons, because two controls
@@ -98,11 +105,9 @@ export function CallIn({
       <div className="outage called called--up" data-testid="on-the-mic" role="status">
         <p className="outage__headline">You're on the mic.</p>
         <p className="outage__detail" data-testid="on-the-mic-detail">
-          {VOICE_CARRIES
+          {heard
             ? 'The room can hear you. The music has come down for it, and yours has gone quiet so it cannot get back into your microphone.'
-            : heard
-              ? 'Whoever runs the decks can hear you, and the music has come down across the room — but the room itself cannot hear you yet.'
-              : 'The music has come down for you across the room. Your microphone is on its way to the decks.'}
+            : 'The music has come down for you across the room. Your microphone is on its way to the decks.'}
         </p>
 
         <Meter guest={guest} />

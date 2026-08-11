@@ -30,7 +30,10 @@ interface Sent {
 class FakeSender {
   parameters: RTCRtpSendParameters = { encodings: [{}] } as RTCRtpSendParameters
   applied: RTCRtpSendParameters | null = null
-  replaceTrack: (track: MediaStreamTrack) => Promise<void> = async () => undefined
+  replaced: MediaStreamTrack | null = null
+  replaceTrack: (track: MediaStreamTrack) => Promise<void> = async (track) => {
+    this.replaced = track
+  }
   getParameters(): RTCRtpSendParameters {
     return this.parameters
   }
@@ -51,11 +54,8 @@ class FakeTransceiver {
   direction = 'recvonly'
   readonly receiver = { track: { kind: 'audio' } as MediaStreamTrack }
   readonly sender = new FakeSender()
-  replaced: MediaStreamTrack | null = null
-  constructor() {
-    this.sender.replaceTrack = async (next: MediaStreamTrack) => {
-      this.replaced = next
-    }
+  get replaced(): MediaStreamTrack | null {
+    return this.sender.replaced
   }
 }
 
@@ -121,6 +121,10 @@ class FakePeerConnection {
 
   async addIceCandidate(candidate: RTCIceCandidateInit): Promise<void> {
     this.candidates.push(candidate)
+  }
+
+  getSenders(): FakeSender[] {
+    return this.senders
   }
 
   close(): void {
@@ -365,6 +369,27 @@ describe('the talk channel', () => {
     expect(sent.slice(1)).toEqual([
       { payload: { kind: 'ice', candidate: { candidate: 'one' }, channel: 'talk' } },
     ])
+  })
+})
+
+describe('swapping what a connection carries', () => {
+  it('changes the source without touching the negotiation', async () => {
+    const first = track()
+    const link = offerVoice(first, { iceServers: [], send: collector().send })
+    await settle()
+    const pc = FakePeerConnection.built[0]!
+    const before = pc.local
+
+    const second = track()
+    link.replace(second)
+    await settle()
+
+    // The whole reason mix-minus is cheap. A listener who is brought up has to
+    // stop receiving the bus that now carries their own voice, and rebuilding
+    // the connection to do it would cost them a second of the station at the
+    // moment they were put on air.
+    expect(pc.senders[0]!.replaced).toBe(second)
+    expect(pc.local).toBe(before)
   })
 })
 

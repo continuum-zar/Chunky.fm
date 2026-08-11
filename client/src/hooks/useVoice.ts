@@ -100,8 +100,18 @@ interface BroadcastOptions {
   connection: StationConnection | null
   /** This socket's own id, so the decks never offer themselves a microphone. */
   me: number | null
-  /** What to send. Null while the mic is shut, which is also "no peers". */
+  /** What to send the room. Null while there is nothing to send, which is also "no peers". */
   track: MediaStreamTrack | null
+  /**
+   * What to send whoever is up: the room bus, minus themselves.
+   *
+   * The whole feature is this being a different track from the one above. Send
+   * a guest the room bus and they hear their own voice about six hundred
+   * milliseconds after they said it, which is not a cosmetic problem — delayed
+   * feedback at that interval is used deliberately to disrupt fluency, and the
+   * person it happens to will stop mid-sentence and assume the station broke.
+   */
+  guestTrack: MediaStreamTrack | null
   /** Who to send it to: the roster, minus this console. */
   targets: number[]
   iceServers: RTCIceServer[] | null
@@ -112,6 +122,14 @@ interface BroadcastOptions {
   speaker: number | null
   /** A guest's voice, once one is arriving. Null takes it away again. */
   onGuest(stream: MediaStream | null): void
+  /**
+   * Put the guest on the air, or take them off, as a linear gain.
+   *
+   * Called by this hook rather than by the console, because the *order* matters
+   * more than the value and only this knows when the swap happened. See the
+   * talk-channel effect.
+   */
+  onAir(level: number): void
 }
 
 export interface VoiceBroadcast {
@@ -137,10 +155,12 @@ export function useVoiceBroadcast({
   connection,
   me,
   track,
+  guestTrack,
   targets,
   iceServers,
   speaker,
   onGuest,
+  onAir,
 }: BroadcastOptions): VoiceBroadcast {
   const links = useRef(new Map<number, PeerLink>())
   /**
@@ -158,6 +178,13 @@ export function useVoiceBroadcast({
   // connection not torn down — every time the console re-renders.
   const guestStream = useRef(onGuest)
   guestStream.current = onGuest
+  const fader = useRef(onAir)
+  fader.current = onAir
+  // The two buses, read inside the effects rather than listed as dependencies:
+  // they are stable for the life of the mixer, and a track identity that
+  // changed would tear down every connection in the room.
+  const buses = useRef({ track, guestTrack })
+  buses.current = { track, guestTrack }
   const attempts = useRef(new Map<number, number>())
   const retries = useRef(new Set<number>())
   const [peers, setPeers] = useState<PeerState[]>([])
@@ -253,7 +280,11 @@ export function useVoiceBroadcast({
       note(id, 'new')
       open.set(
         id,
-        offerVoice(track, {
+        // Whoever holds the floor gets the bus that does not carry them. This
+        // covers the listener who is *already* up when their connection is
+        // built — a reconnect, or somebody the console retried — where there is
+        // no swap to make because there was nothing there to swap.
+        offerVoice(id === speaker ? (buses.current.guestTrack ?? track) : track, {
           iceServers,
           label: `to listener ${id}`,
           send: (payload) => connection.send({ type: 'signal', to: id, payload }),
@@ -264,7 +295,7 @@ export function useVoiceBroadcast({
         }),
       )
     }
-  }, [connection, track, iceServers, me, wanted, retryTick, note, retry])
+  }, [connection, track, iceServers, me, wanted, retryTick, speaker, note, retry])
 
   // Leaving the console, or closing the mic, takes every connection with it.
   useEffect(() => {
@@ -287,15 +318,30 @@ export function useVoiceBroadcast({
   useEffect(() => {
     const open = talk.current
     const wanted = connection && iceServers !== null && speaker !== null && speaker !== me
+
     if (open && (!wanted || open.id !== speaker)) {
+      // Coming down, and the order is the reverse of going up for the same
+      // reason. Off the air first, so nothing of theirs is still reaching the
+      // room while the rest of this happens; then the voice away; and only then
+      // their own connection back onto the bus that carries the room, which is
+      // now a room they are no longer on.
+      fader.current(0)
       open.link.close()
       talk.current = null
       setGuest(null)
       guestStream.current(null)
+      links.current.get(open.id)?.replace(buses.current.track)
     }
     if (!wanted || talk.current) return
 
     const id = speaker as number
+    // **Before anything of theirs can reach the room.** This is the whole
+    // milestone in one line and one ordering: swap their downlink onto the bus
+    // that does not carry them, and only then let them onto the one that does.
+    // The other way round leaves a window — short, and a whole syllable long —
+    // in which a guest is on the room bus and still receiving it, which is the
+    // delayed-sidetone failure this entire design exists to avoid.
+    links.current.get(id)?.replace(buses.current.guestTrack)
     setGuest('new')
     talk.current = {
       id,
@@ -304,12 +350,21 @@ export function useVoiceBroadcast({
         channel: 'talk',
         label: `from listener ${id}`,
         send: (payload) => connection.send({ type: 'signal', to: id, payload }),
-        onStream: (stream) => guestStream.current(stream),
+        onStream: (stream) => {
+          guestStream.current(stream)
+          // On the air only once there is a voice to put there, which is also
+          // safely after the swap above: the connection was built before this
+          // could fire.
+          fader.current(1)
+        },
         onState: (state) => {
           setGuest(state)
           // `disconnected` is often a blip ICE recovers from on its own, so
           // only the states it does not come back from take the voice away.
-          if (state === 'failed' || state === 'closed') guestStream.current(null)
+          if (state === 'failed' || state === 'closed') {
+            fader.current(0)
+            guestStream.current(null)
+          }
         },
       }),
     }

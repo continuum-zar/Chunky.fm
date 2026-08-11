@@ -45,7 +45,6 @@ import type { AdminSession } from './hooks/useAdminSession.js'
 import { type MicInput, useMicInput } from './hooks/useMicInput.js'
 import type { StationConnection, StationStatus } from './lib/station.js'
 import { type AirMixerHandle, useAirMixer } from './hooks/useAirMixer.js'
-import { VOICE_CARRIES } from './lib/hand.js'
 import {
   HEALTH,
   PENDING,
@@ -560,6 +559,28 @@ function Controls({
     [api, floorAction],
   )
 
+  /**
+   * The dump button, as much of one as this station can have.
+   *
+   * Real radio runs seven seconds behind and drops the last seven when
+   * something is said that should not have been. That is not available here:
+   * the music is aligned to a server clock and the voice is live, so delaying
+   * the voice would put every cue seven seconds late over a record that did not
+   * wait, and delaying everything means delaying the clock, which is the
+   * project.
+   *
+   * So the honest substitute is speed. The fader goes to zero in the same frame
+   * the key goes down — client side, no round trip, nothing to wait for — and
+   * the rest follows: the connection closes, and the station is told. It cannot
+   * un-say the word. It can stop the second one, and that is the whole of what
+   * is on offer.
+   */
+  const cut = useCallback(() => {
+    if (!floor?.speaker) return
+    mixer.mixer?.cut()
+    void floorAction(() => api.floor('drop'))
+  }, [api, floor?.speaker, floorAction, mixer.mixer])
+
   const report = (line: string) => setUploads((seen) => [...seen, { id: seen.length, line }])
 
   const upload = useCallback(
@@ -644,6 +665,7 @@ function Controls({
             subscribe={subscribe}
             mixer={mixer}
             floor={floor}
+            onCut={cut}
             onOpen={openMic}
             onClose={closeMic}
             onRenew={renewMic}
@@ -715,6 +737,15 @@ function Controls({
 /** The talk key. A letter, and not the spacebar; see the note in `MicCard`. */
 const TALK_KEY = 'm'
 
+/**
+ * The cut, on shift and a letter.
+ *
+ * Not a bare key, because the thing it does cannot be undone and the console is
+ * a page somebody types on. Not a modifier the browser has an opinion about
+ * either: ctrl and meta are full of shortcuts that would fire alongside it.
+ */
+const CUT_KEY = 'x'
+
 /** How far the music drops, in dB, for a slider that speaks a radio language. */
 const decibels = (gain: number) => Math.round(20 * Math.log10(gain))
 
@@ -748,6 +779,7 @@ function MicCard({
   subscribe,
   mixer,
   floor,
+  onCut,
   onOpen,
   onClose,
   onRenew,
@@ -774,6 +806,8 @@ function MicCard({
   mixer: AirMixerHandle
   /** Who else is talking, which is the other reason the mesh comes up. */
   floor: FloorSnapshot | null
+  /** Take the guest off the air now, and stand them down. See `cut`. */
+  onCut(): void
   onOpen(): void
   onClose(): void
   onRenew(): void
@@ -837,6 +871,17 @@ function MicCard({
    * be broadcasting them.
    */
   const [cueing, setCueing] = useState(true)
+  /**
+   * How loud the guest is in the room, as a linear gain.
+   *
+   * A fader rather than a switch, because a caller on a phone in a corridor and
+   * a caller on a decent headset are not the same volume and the difference is
+   * something you hear rather than something you set beforehand. It starts
+   * open: they were brought up in order to be heard, and a console that put
+   * somebody on air at zero would have you looking for the fault in the
+   * connection.
+   */
+  const [guestAir, setGuestAir] = useState(1)
 
   const broadcast = useVoiceBroadcast({
     connection,
@@ -848,13 +893,27 @@ function MicCard({
     track: sending ? mixer.roomTrack : null,
     targets,
     iceServers,
+    guestTrack: mixer.guestTrack,
     speaker: floor?.speaker?.id ?? null,
     // Straight into the mixer, which wires them to your headphones and to the
     // room bus behind a fader that is shut. Wired and silent: somebody put in
     // front of thirty people by a negotiation completing would be a decision
     // nobody made.
     onGuest: useCallback((stream: MediaStream | null) => mixer.mixer?.hear(stream), [mixer.mixer]),
+    // The level is this card's; *when* it is applied is the hook's, because
+    // only that knows whether the guest has been swapped onto the bus that does
+    // not carry them yet. See the talk-channel effect.
+    onAir: useCallback(
+      (level: number) => mixer.mixer?.air(level === 0 ? 0 : guestAir),
+      [mixer.mixer, guestAir],
+    ),
   })
+
+  // Riding the fader while somebody is up. Only while they are: a level set
+  // between calls is remembered by the mixer and applied to the next one.
+  useEffect(() => {
+    if (floor?.speaker && broadcast.guest === 'connected') mixer.mixer?.air(guestAir)
+  }, [guestAir, floor?.speaker, broadcast.guest, mixer.mixer])
 
   // Follow the button, and re-apply whenever a voice arrives: `hear` builds the
   // guest half of the graph on the first call, so a cue set before there was
@@ -862,6 +921,8 @@ function MicCard({
   useEffect(() => {
     mixer.mixer?.cue(cueing)
   }, [cueing, mixer.mixer, broadcast.guest])
+
+
   useEffect(() => subscribe(broadcast.handleMessage), [subscribe, broadcast.handleMessage])
   // What the slider shows while it is being dragged. The station's value is
   // the truth, but a fader that only moved when the round trip landed would
@@ -1086,6 +1147,9 @@ function MicCard({
           state={broadcast.guest}
           cueing={cueing}
           onCue={setCueing}
+          air={guestAir}
+          onAir={setGuestAir}
+          onCut={onCut}
         />
       )}
 
@@ -1164,16 +1228,6 @@ function FloorCard({ floor, hands, air, onBringUp, onStandDown }: FloorCardProps
         <h2 className="card__title">Callers</h2>
       </header>
 
-      {!VOICE_CARRIES && (
-        // The same sentence the guest is shown, for the same reason. A card
-        // that let somebody be brought up without saying their voice does not
-        // travel yet would have the console apologising to a room that heard
-        // nothing. Goes, with the constant, when the talk channel arrives.
-        <p className="mic__warn" data-testid="floor-silent">
-          A guest ducks the room and lights the badge. Their voice does not travel yet.
-        </p>
-      )}
-
       {speaker ? (
         <div className="floor__up" data-testid="floor-speaker">
           <span className="floor__who">{speaker.nickname} has the mic</span>
@@ -1232,13 +1286,39 @@ function GuestLink({
   state,
   cueing,
   onCue,
+  air,
+  onAir,
+  onCut,
 }: {
   nickname: string
   state: PeerHealth | null
   cueing: boolean
   onCue(on: boolean): void
+  air: number
+  onAir(level: number): void
+  onCut(): void
 }) {
   const health = HEALTH[state ?? PENDING]
+
+  // The cut, on a key, because the whole of its value is being faster than
+  // reaching for a mouse. Held to one letter with a modifier: it must not be
+  // reachable by accident, and it must not need looking for.
+  useEffect(() => {
+    const down = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== CUT_KEY || !event.shiftKey) return
+      if (event.metaKey || event.ctrlKey || event.altKey) return
+      if (
+        event.target instanceof HTMLElement &&
+        event.target.closest('input, textarea, [contenteditable]') !== null
+      ) {
+        return
+      }
+      event.preventDefault()
+      onCut()
+    }
+    window.addEventListener('keydown', down)
+    return () => window.removeEventListener('keydown', down)
+  }, [onCut])
   return (
     <div className="guest" data-testid="guest-link" data-state={state ?? PENDING}>
       <div className="guest__row">
@@ -1257,11 +1337,34 @@ function GuestLink({
         />
         In my headphones
       </label>
-      {!VOICE_CARRIES && (
-        // The half of this that is not built yet, said where the decision to
-        // rely on it would be made. Goes with the constant.
-        <p className="guest__note">Yours only — the room cannot hear them yet.</p>
-      )}
+
+      <label className="guest__fader">
+        <span className="guest__fader-label">
+          In the room
+          <em data-testid="guest-air">{air === 0 ? 'off' : `${Math.round(air * 100)}%`}</em>
+        </span>
+        <input
+          type="range"
+          min={0}
+          max={1}
+          step={0.05}
+          value={air}
+          data-testid="guest-air-fader"
+          onChange={(event) => onAir(Number(event.target.value))}
+        />
+      </label>
+
+      {/* Sharp, and next to a polite one, so the sharp one stays sharp. This
+          takes the guest off the room bus in the same frame it is pressed —
+          client side, no round trip — and then stands them down. */}
+      <button
+        type="button"
+        className="button button--danger guest__cut"
+        data-testid="guest-cut"
+        onClick={onCut}
+      >
+        Cut ({CUT_KEY.toUpperCase()})
+      </button>
     </div>
   )
 }

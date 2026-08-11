@@ -762,7 +762,47 @@ hear a thing.
 
 ---
 
-## C5 — mix-minus, and on air
+## C5 — mix-minus, and on air — **built**
+
+Shipped. The room hears a caller and the caller does not hear themselves,
+measured at both ends: **0.28 in the room, 0.0006 in their own ears** — a factor
+of about four hundred, which is the whole feature as one number.
+
+The ordering held up exactly as the sketch below argues, and putting it inside
+the talk-channel effect rather than leaving it to the console is what made it
+possible to state: the swap onto the mix-minus bus happens when the connection
+is *built*, which is necessarily before any audio can arrive on it, and the air
+fader opens in `onStream`. There is no window, rather than a window nobody has
+managed to hit yet.
+
+Three things that came out different:
+
+- **The cut stands the guest down as well.** The sketch had it dropping the
+  fader and closing the channel, which would have left the console showing
+  somebody on air who could not be heard — a state with no name and no way out
+  except a second button. Now it is one key: the fader hits zero client-side in
+  the same frame, and the floor drop follows over HTTP. Bound to `shift+X`
+  rather than a bare key, because the console is a page somebody types on and
+  this is the one control that cannot be undone.
+- **`onAir` is called by the hook, not by the console.** The console owns the
+  *level*; only `useVoiceBroadcast` knows whether the swap has happened yet, and
+  the order matters more than the value.
+- **`VOICE_CARRIES` is gone,** along with both branches it guarded. It existed to
+  keep two screens honest across four milestones; a constant that outlived its
+  reason would be worse than the sentence it replaced.
+
+And one real bug, found by making the QA do a second call rather than one:
+**the guest's microphone was never given back.** `CallIn` was rendered only
+while somebody was invited or up, so React unmounted it before its own cleanup
+could observe that the call had ended — leaving a caller who had come down with
+an open capture and a recording light. It now renders always and draws nothing
+most of the time, which looks wasteful and is the thing that makes the teardown
+reachable.
+
+**Verified:** `qa:callin` grown to seven more checks — the room hearing them, the
+guest not, the cut, a call after a cut, and the microphone going back. Plus a
+unit test that `replace` swaps the source without touching the local
+description, which is what buys the gap-free swap. `qa:voice` unchanged.
 
 The short milestone that the previous four were for.
 
@@ -820,11 +860,14 @@ sharp one stays sharp.
 
 ### Tests
 
-`client/test/mixer.test.ts`, extended — **the room bus contains the guest and the
-guest bus does not.** This is the most important test in the feature, because the
-bug it catches is inaudible to the only person who can see the console. Assert on
-the fake `AudioContext`'s connection graph: a path from the guest source to the
-room destination, and no path from the guest source to the guest destination.
+`client/test/mixer.test.ts` already pinned the graph in C2 — **the room bus
+contains the guest and the guest bus does not** — and `webrtc.test.ts` gained
+the other half: `replace` swapping a sender's source while the local description
+stays exactly as it was, which is what makes the swap free.
+
+Neither is the real assertion. That one is in `qa:callin`, at both ends of a
+real call at once, because either half alone is meaningless: a room that hears
+nothing is a broken call, and a guest who hears themselves is an unusable one.
 
 `client/scripts/qa-callin.ts` — three Chrome pages with fake devices, following
 `qa-voice.ts` exactly, which is built for making two separately observable claims:
@@ -897,7 +940,7 @@ for building it this way.
 | C2 | Extract `useAirMixer` | Low | **built** — ~700 lines with tests | Yes |
 | C3 | The guest's sound check | Low | **built** — ~900 lines with tests | **Yes** |
 | C4 | The talk channel, cue only | **High** | **built** — ~700 lines with tests | **Yes** — audition |
-| C5 | Mix-minus, on air, the cut | Medium | ~150 lines | — |
+| C5 | Mix-minus, on air, the cut | Medium | **built** — ~400 lines with tests | — |
 | C6 | Survive contact | Medium | ~150 lines | — |
 
 C1, C3 and C4 are each worth shipping on their own, and that is not a

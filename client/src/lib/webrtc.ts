@@ -208,6 +208,20 @@ export function diagnose({ iceServers, gathered, received }: VoiceReport): strin
 export interface PeerLink {
   /** Take something the far end sent. Order-independent except the offer. */
   accept(payload: SignalPayload): Promise<void>
+  /**
+   * Change what this connection is sending, without renegotiating.
+   *
+   * The one thing that makes mix-minus cheap. A listener who is brought up has
+   * to stop receiving the room bus — which now has their own voice on it — and
+   * start receiving a bus that does not, and doing that by rebuilding the
+   * connection would cost them a second of the station at exactly the moment
+   * they were being put on air.
+   *
+   * No renegotiation happens because nothing the far end can see has changed:
+   * both tracks are mono audio off the same context, so the sender swaps its
+   * source and the codec, the direction and the m-line all stay as they were.
+   */
+  replace(track: MediaStreamTrack | null): void
   readonly connection: RTCPeerConnection
   close(): void
 }
@@ -306,6 +320,16 @@ function link(
       const answer = await pc.createAnswer()
       await pc.setLocalDescription(answer)
       post({ kind: 'answer', sdp: answer.sdp ?? '' })
+    },
+    replace(next: MediaStreamTrack | null) {
+      const sender = pc.getSenders?.()[0]
+      // Best-effort, and deliberately not awaited: this is called from an effect
+      // that is also deciding whether somebody is on the air, and a promise
+      // that resolved a frame later would put the two in the wrong order. A
+      // swap that fails leaves the connection carrying what it was carrying,
+      // which is the room bus — audible, and wrong in the direction that is
+      // recoverable by standing the guest down.
+      void sender?.replaceTrack?.(next)?.catch?.(() => undefined)
     },
     close() {
       pc.onicecandidate = null

@@ -38,7 +38,9 @@ import {
   DUCKS,
   type Duck,
   INSTRUMENT_DUCKS,
+  INSTRUMENT_VOICE,
   STATION_URL,
+  VOICE_LEVEL,
   micCommand,
   tuneIn,
   wait,
@@ -255,11 +257,23 @@ async function onHeadphones(): Promise<void> {
   const browser = await browserWith(headphonesWav())
   try {
     const guest = await browser.newPage()
-    // Before any of the app runs, so the very first ramp is caught.
+    // Before any of the app runs, so the very first ramp is caught — and so the
+    // guest's own ears can be measured, which is the assertion this whole
+    // feature turns on.
     await guest.addInitScript(INSTRUMENT_DUCKS)
+    await guest.addInitScript(INSTRUMENT_VOICE)
     await guest.goto(STATION_URL)
     await tuneIn(guest, 'ama')
     await wait(1_500)
+
+    // An ordinary listener, who is the one the room is made of. They must hear
+    // the guest; the guest must not.
+    const room = await browser.newPage()
+    await room.addInitScript(INSTRUMENT_VOICE)
+    await room.goto(STATION_URL)
+    await tuneIn(room, 'thabo')
+    await wait(1_500)
+
     const console_ = await decks(browser, true)
     await askedUp(guest, console_)
 
@@ -313,14 +327,41 @@ async function onHeadphones(): Promise<void> {
       ),
       (await console_.locator('[data-testid=guest-link]').getAttribute('data-state')) ?? '?',
     )
-    // The half that is not built yet, and the reason this milestone stops here:
-    // the guest is wired to the room bus behind a fader that is shut.
+    // And the guest is told so, which matters more than it looks: somebody
+    // whose own music has gone silent and who can hear nothing of themselves
+    // has no evidence at all that anything is working.
     checks.run(
-      'and the room is told, plainly, that it cannot',
+      'and the guest is told the room can hear them',
       ((await guest.locator('[data-testid=on-the-mic-detail]').textContent()) ?? '').includes(
-        'cannot hear you yet',
+        'The room can hear you',
       ),
-      'the guest is not being told the room can hear them',
+      'the guest is left guessing',
+    )
+
+    // The two facts this milestone is for, measured at the two ends that can
+    // tell them apart. They are asserted together because either one alone is
+    // meaningless: a room that hears nothing is a broken call, and a guest who
+    // hears themselves is an unusable one.
+    let inTheRoom = 0
+    for (let i = 0; i < 30 && inTheRoom < HEARD; i++) {
+      inTheRoom = (await room.evaluate(VOICE_LEVEL)) as number
+      if (inTheRoom < HEARD) await wait(500)
+    }
+    checks.run('the room hears the guest', inTheRoom >= HEARD, `peak ${inTheRoom.toFixed(4)}`)
+
+    // Over a whole cycle of the capture file, so "quiet" cannot be the silent
+    // half of it. This is mix-minus, and it is inaudible from every angle
+    // except this one: the console sees a healthy connection, the room hears
+    // them perfectly, and the only person who knows is the one who cannot say.
+    let inTheirEars = 0
+    for (let i = 0; i < 14; i++) {
+      inTheirEars = Math.max(inTheirEars, (await guest.evaluate(VOICE_LEVEL)) as number)
+      await wait(500)
+    }
+    checks.run(
+      'and the guest does not hear themselves',
+      inTheirEars < HEARD,
+      `peak ${inTheirEars.toFixed(4)}`,
     )
 
     // Muting has to reach the far end rather than only the button. Measured
@@ -347,6 +388,49 @@ async function onHeadphones(): Promise<void> {
       `last ramp ${up?.target}`,
     )
 
+    // The dump button, as much of one as a station whose music is aligned to a
+    // clock can have: there is no delay to drop, so all it has is speed. It has
+    // to take the guest off the room bus *and* stand them down, or the console
+    // is left showing somebody on air who cannot be heard.
+    await console_.click('[data-testid=guest-cut]')
+    let afterCut = 0
+    for (let i = 0; i < 6; i++) {
+      afterCut = Math.max(afterCut, (await room.evaluate(VOICE_LEVEL)) as number)
+      await wait(300)
+    }
+    checks.run('the cut takes them off the air', afterCut < HEARD, `peak ${afterCut.toFixed(4)}`)
+    checks.run(
+      'and stands them down with it',
+      (await console_.locator('[data-testid=floor-speaker]').count()) === 0,
+      'the floor is empty',
+    )
+
+    // The microphone has to go back when a call ends. A caller left holding an
+    // open capture and a recording light after coming down is the sort of thing
+    // nobody notices until somebody notices it about themselves.
+    checks.run(
+      'the microphone goes back when the call ends',
+      (await guest.locator('[data-testid=guest-meter]').count()) === 0,
+      'no meter, so no open capture',
+    )
+
+    // Then all the way round once more, so that a call after a cut is an
+    // ordinary call: nothing left latched shut, nothing left connected, and a
+    // fresh check because their situation may be exactly why they were cut.
+    await askedUp(guest, console_)
+    await guest.click('[data-testid=sound-check]')
+    const second = await verdict(guest)
+    checks.run('somebody cut off can be brought back', second.passed, second.notice.slice(0, 40))
+    if (second.passed) {
+      await guest.click('[data-testid=go-up]')
+      let again = 0
+      for (let i = 0; i < 30 && again < HEARD; i++) {
+        again = (await room.evaluate(VOICE_LEVEL)) as number
+        if (again < HEARD) await wait(500)
+      }
+      checks.run('and the room hears them again', again >= HEARD, `peak ${again.toFixed(4)}`)
+    }
+
     await guest.click('[data-testid=come-down]')
     await wait(1_500)
     checks.run(
@@ -356,6 +440,12 @@ async function onHeadphones(): Promise<void> {
     )
     const gone = (await console_.evaluate(CUE_LEVEL)) as number
     checks.run('and takes their voice with it', gone < HEARD, `peak ${gone.toFixed(4)}`)
+    let roomAfter = 0
+    for (let i = 0; i < 8; i++) {
+      roomAfter = Math.max(roomAfter, (await room.evaluate(VOICE_LEVEL)) as number)
+      await wait(400)
+    }
+    checks.run('and the room stops hearing them', roomAfter < HEARD, `peak ${roomAfter.toFixed(4)}`)
     // Back to the room's duck rather than to full, and that is the rule from
     // the floor showing through: standing a guest down does not shut the mic,
     // because whoever runs the decks nearly always says something after them.

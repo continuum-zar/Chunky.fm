@@ -2976,11 +2976,37 @@ h2 {
   line-height: 16.5px;
 }
 
-.guest__note {
-  margin: 6px 0 0;
-  color: var(--warn);
+/* Riding the caller's level. A caller on a phone in a corridor and one on a
+   decent headset are not the same volume, and the difference is something you
+   hear rather than something you set beforehand. */
+.guest__fader {
+  display: block;
+  margin-top: 8px;
+}
+
+.guest__fader-label {
+  display: flex;
+  justify-content: space-between;
+  color: var(--faint);
   font-size: 11px;
   line-height: 16.5px;
+}
+
+.guest__fader-label em {
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+.guest__fader input {
+  width: 100%;
+}
+
+/* Sharp, and beside a polite one so the sharp one stays sharp. This is as much
+   of a dump button as a station whose music is aligned to a clock can have:
+   there is no delay to drop, so all it has is speed. */
+.guest__cut {
+  width: 100%;
+  margin-top: 8px;
 }
 
 /* Who can actually hear the mic.

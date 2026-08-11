@@ -650,7 +650,7 @@ function Station({ route: requested, session }: { route: Route; session: AdminSe
             the one thing on this page somebody must never have to go looking
             for. A banner in a panel behind a route is a microphone somebody
             forgot was open. */}
-        {!admin && joined && (invited || speaking) && (
+        {!admin && joined && (
           <CallIn
             connection={connection}
             guest={guest}
