@@ -83,6 +83,12 @@ export default defineConfig({
     proxy: {
       '/api': { target: SERVER, changeOrigin: true },
       '/ws': { target: SERVER.replace(/^http/, 'ws'), ws: true },
+      // The crawl files, which the station answers rather than the bundle.
+      // Nothing crawls a dev server; this is here so the three front doors go
+      // on agreeing, which is the property `lib/doorway.ts` exists to protect.
+      '/robots.txt': { target: SERVER, changeOrigin: true },
+      '/sitemap.xml': { target: SERVER, changeOrigin: true },
+      '/llms.txt': { target: SERVER, changeOrigin: true },
     },
   },
 })

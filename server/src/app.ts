@@ -17,6 +17,7 @@ import { PlaybackState } from './playback.js'
 import { type RealtimeHandle, attachRealtime } from './realtime.js'
 import { hasAdminCredentials, mayListen } from './lib/auth.js'
 import { adminRoutes } from './routes/admin.js'
+import { crawlRoutes } from './routes/crawl.js'
 import { floorRoutes } from './routes/floor.js'
 import { micRoutes } from './routes/mic.js'
 import { rtcRoutes } from './routes/rtc.js'
@@ -335,6 +336,9 @@ export async function buildApp({
   await app.register(rtcRoutes({ config, turn }))
   await app.register(mutesRoutes({ config, mutes }))
   await app.register(paddingRoutes({ config, padding }))
+  // Before the client routes and well before the app-shell fallback, which is
+  // what was answering these with a page of HTML. See `crawlRoutes`.
+  await app.register(crawlRoutes())
   await app.register(listenRoutes({ config }))
   await app.register(uploadRoutes({ config, db, lyrics }))
   await app.register(mediaRoutes({ config, db }))

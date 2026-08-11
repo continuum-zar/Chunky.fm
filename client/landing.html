@@ -15,9 +15,101 @@
       content="A live radio station where everyone hears the same second of the same song, chosen by one person on the decks. No skips, no shuffle, no algorithm. One room, listening together."
     />
     <!-- Same two vendored faces as the station, from the app's own origin. -->
+
+    <!-- The prelude below is styled here rather than in landing.css because it
+         has to hold up on its own: it is what a reader sees before the bundle
+         arrives, and what everything that does not run JavaScript sees instead
+         of the bundle. Both cases are ones where a stylesheet may not have
+         landed either, so this is small enough to inline and asks for nothing. -->
+    <style>
+      .prelude {
+        max-width: 34rem;
+        margin: 0 auto;
+        padding: 18vh 1.5rem 6rem;
+      }
+      .prelude h1 {
+        margin: 0 0 1.5rem;
+        font-size: clamp(1.75rem, 5vw, 2.75rem);
+        line-height: 1.15;
+        letter-spacing: -0.02em;
+      }
+      .prelude p {
+        margin: 0 0 1.25rem;
+        font-size: 1rem;
+        line-height: 1.7;
+      }
+      .prelude a {
+        color: inherit;
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <!--
+      What the document says without the bundle.
+
+      Everything this page argues used to live inside a React chunk, which meant
+      the served document was a title, one sentence and an empty div. A browser
+      recovers from that a few hundred kilobytes later. The things that decide
+      whether anybody ever finds this station mostly do not: the crawlers that
+      answer questions, and every link unfurler in every chat app, read the HTML
+      and take what is in it. They were reading almost nothing.
+
+      So the argument is here, in the document, served to everybody. React
+      replaces it on mount — `createRoot` empties its container — so there is
+      one copy of it on screen at a time and no hidden text anywhere, which is
+      the other way this is commonly done and is the way that gets a site
+      penalised.
+
+      It is deliberately not a <noscript>. A noscript is a consolation for a
+      browser that will not run the page; this is what the page *says*, and it
+      is true whether or not anything else ever loads.
+
+      Keep it in step with `Landing.tsx`. Not word for word — the page has
+      motion and a globe and this cannot — but a reader arriving at one after
+      the other must not feel they were told two different things.
+    -->
+    <div id="root">
+      <article class="prelude">
+        <h1>Music deserves more than an algorithm.</h1>
+
+        <p>
+          <strong
+            >chunky.fm is a live internet radio station where everyone listening hears the same
+            second of the same song.</strong
+          >
+          One person chooses the records. There is no shuffle, no skipping and no algorithm.
+          Sessions happen on announced evenings and end when they end — the station is deliberately
+          off air in between.
+        </p>
+
+        <p>
+          The room chooses the theme, and the set is put together over the day it plays. When the
+          broadcast begins, every browser tuned in aligns itself to the station’s own clock, so
+          people in different countries are inside the same bar of the same record at the same
+          instant.
+        </p>
+
+        <p>
+          Some songs don’t need better recommendations. They need better introductions. So the music
+          arrives with context beside it — where a record came from, what was happening around it,
+          what to listen for — and with a room of people hearing it at the same time.
+        </p>
+
+        <p>
+          You’re not listening beside people. You’re listening with them. There is a chat, a way to
+          ask for something, and a microphone whoever is on the decks can talk over the music with.
+          Listeners can put a hand up and be brought on air to say something themselves.
+        </p>
+
+        <p>
+          There is no account and nothing to sign up for: you pick a name when you arrive and it
+          stays in your own browser. Listening is free. When the station is off air, this page says
+          when the next session is.
+        </p>
+
+        <p><a href="/listen">Tune in</a></p>
+      </article>
+    </div>
     <script type="module" src="/src/landing/main.tsx"></script>
   </body>
 </html>

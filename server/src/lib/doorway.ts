@@ -85,5 +85,19 @@ export function doorway(url: string): Doorway {
  * every other refusal uses, not handed a page of HTML with a 200 on it.
  */
 export function isServerPath(path: string): boolean {
-  return path === '/health' || path === '/ws' || path.startsWith('/api/')
+  return path === '/health' || path === '/ws' || path.startsWith('/api/') || isCrawlPath(path)
+}
+
+/**
+ * The files a crawler asks for, which the station answers rather than the
+ * bundle. See `routes/crawl.ts`.
+ *
+ * Here rather than only in the route table because the app-shell fallback has
+ * to know about them too: a request that somehow misses the routes must be told
+ * there is no such file, not handed a page of HTML with a 200 on it. A robots
+ * file that is a document is worse than one that is missing — the first is
+ * read and misunderstood, and the second is simply absent.
+ */
+export function isCrawlPath(path: string): boolean {
+  return path === '/robots.txt' || path === '/sitemap.xml' || path === '/llms.txt'
 }
