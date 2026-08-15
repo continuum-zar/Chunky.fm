@@ -43,9 +43,9 @@ import { useScrubbedSession } from './useScrubbedSession.js'
  * order to describe the station would be down exactly when it was needed.
  *
  * It is arranged as one question at a time (what is this, why does it exist,
- * how does it work, what is it not, who is running it) because a visitor who
- * has to hold six ideas at once puts the page down. The philosophy is meant to
- * arrive by the end rather than in the first screen.
+ * how does it work, what else is it, what is it not, who is running it) because
+ * a visitor who has to hold six ideas at once puts the page down. The philosophy
+ * is meant to arrive by the end rather than in the first screen.
  *
  * The one thing it does not invent is the design. The deck and the level meter
  * here are the station's own components imported unchanged, and every colour
@@ -78,6 +78,7 @@ export function Landing() {
         <Works />
         <Guide />
         <Room at={at} />
+        <Talks />
         <Wishes />
         <Live />
         <BeenOn />
@@ -94,9 +95,10 @@ export function Landing() {
 const TUNE_IN = stationUrl()
 const DECKS = stationUrl('admin')
 
-/** Where the bar can take you. The same three the foot repeats. */
+/** Where the bar can take you. The same four the foot repeats. */
 const NAV = [
   { name: 'The room', link: '#room' },
+  { name: 'Conversations', link: '#talks' },
   { name: 'What has been on', link: '#been-on' },
   { name: 'The DJ', link: '#dj' },
 ]
@@ -158,6 +160,14 @@ const Hero = memo(function Hero() {
           The room chooses the theme. I spend the day curating the story. When the broadcast begins,
           everyone hears the same song at the same moment. With context, annotations, and the
           chance to discover something they would never have searched for themselves.
+        </p>
+        {/* The other half of what the station is, said once at the top and
+            argued properly further down. See `Talks`: an evening here is not
+            always records, and a page that only ever said "music" would be
+            describing half of the thing somebody is about to walk into. */}
+        <p className="hero__blurb hero__blurb--also">
+          Other nights there is somebody on the mic instead, and the room listens in on the
+          conversation.
         </p>
         <a className="button button--large" href={TUNE_IN}>
           Join tonight’s session
@@ -792,6 +802,79 @@ function TalkPanel({ at }: { at: number }) {
 }
 
 /**
+ * The other kind of session.
+ *
+ * Straight after `Room`, which is where the talking is established, because
+ * this is the same claim carried one step further: if a room hearing the same
+ * second of a record is worth building, then a room hearing the same second of
+ * somebody answering a question is the same thing with the record turned down.
+ * Put anywhere earlier it would read as a second product bolted on; put here it
+ * reads as what the room was always for.
+ *
+ * It describes nothing that is not already built. A guest arrives on an invite
+ * link like any other listener (see lib/invite.ts), asks for the mic, passes a
+ * sound check and is brought up onto the air by whoever is on the decks (see
+ * CallIn.tsx and the floor controls in AdminPanel.tsx). So this section is the
+ * page finally saying out loud what that machinery is for, rather than a
+ * promise about something that might get written later.
+ *
+ * The note at the end is the only place on the page that says what the whole
+ * thing is rather than what it does, and it is deliberately the quietest block
+ * in the section. It is also the one honest word about how far along this is.
+ * A landing page that opened with "it is still early" would be apologising; one
+ * that never said it at all would be overselling. Said here, after somebody has
+ * read enough to want it, it is a person telling you where you have arrived.
+ *
+ * Set like `Why` and `Creed`: one thought a line, in groups, faint for the
+ * setup and the reading colour for the line that answers it.
+ */
+const Talks = memo(function Talks() {
+  return (
+    <section className="talks" id="talks">
+      <h2 className="section__title talks__title">Not only records</h2>
+
+      <div className="talks__stack">
+        <p className="talks__line">Some sessions are a record and a room.</p>
+        <p className="talks__line talks__line--said">
+          Some are a conversation, and the room is still there for it.
+        </p>
+      </div>
+
+      <div className="talks__stack">
+        <p className="talks__line">A guest gets a link and turns up like anybody else.</p>
+        <p className="talks__line">I bring them up onto the air.</p>
+        <p className="talks__line talks__line--said">
+          Then it is two people talking, with the records still to hand.
+        </p>
+      </div>
+
+      <div className="talks__stack">
+        <p className="talks__line">Anyone listening can ask for the mic.</p>
+        <p className="talks__line">If it is the right moment, it gets opened.</p>
+        <p className="talks__line talks__line--said">
+          The question and the answer land at the same second for everybody.
+        </p>
+      </div>
+
+      <p className="talks__turn">Music, ideas, and the people behind them.</p>
+
+      {/* The plainest words on the page, and set that way on purpose: the rest
+          of this section argues, and this one just says what the thing is. */}
+      <div className="talks__note">
+        <p>
+          chunky.fm is an independent project exploring music, ideas and the people behind them.
+        </p>
+        <p>It’s still early, which is part of the point.</p>
+        <p>
+          I’m interested in building a place where interesting conversations can happen without
+          everything needing to become content.
+        </p>
+      </div>
+    </section>
+  )
+})
+
+/**
  * What the room asks for.
  *
  * The section that would be genres on any other music page, and is not one here.
@@ -1166,6 +1249,9 @@ const Foot = memo(function Foot() {
         </a>
         <a className="foot__way" href="#room">
           The room
+        </a>
+        <a className="foot__way" href="#talks">
+          Conversations
         </a>
         <a className="foot__way" href="#dj">
           The DJ

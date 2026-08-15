@@ -29,6 +29,11 @@ import { memo, type ReactNode, useState } from 'react'
  *  - **It shrinks further.** The original goes to 40% with an 800px floor, which
  *    on most screens means the floor wins and the bar barely moves. This page is
  *    capped at 1080px, so the floor is lower and the shrink is one you can see.
+ *    There is still a floor, in landing.css rather than here, and it is measured
+ *    against what is actually in the bar: below it the centred links overflow
+ *    their box and are laid over the wordmark. See the note on
+ *    `.navbar__body[data-shrunk='true']`, which has to be revisited if a link is
+ *    added to `NAV` or one of them is renamed to something longer.
  */
 
 const SPRING = { type: 'spring', stiffness: 200, damping: 50 } as const
