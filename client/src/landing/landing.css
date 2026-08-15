@@ -3728,6 +3728,25 @@ html {
   object-fit: cover;
 }
 
+/* What the night is, above when it is.
+ *
+ * Above, because it is the thing being decided about: somebody reading this is
+ * choosing whether to spend a Saturday evening on it, and "a conversation with
+ * somebody" and "a set of records" are two different offers. The time is what
+ * they need once they have said yes.
+ *
+ * Set under the date rather than over it even so. The date is the one line this
+ * section has always led with, it is what a poster's own type usually repeats,
+ * and a second heading at the same weight would leave the two arguing. */
+.upcoming__what {
+  max-width: 30ch;
+  margin: 0;
+  color: var(--fg-dim);
+  font-size: 1.05em;
+  line-height: 1.45;
+  text-wrap: balance;
+}
+
 .upcoming__when {
   margin: 0;
   color: var(--fg);

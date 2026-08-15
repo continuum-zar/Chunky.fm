@@ -5,6 +5,7 @@ import type {
   PlaybackSnapshot,
   QueueEntry,
   ScheduledSession,
+  SessionKind,
   Track,
   Wish,
   WishStatus,
@@ -26,6 +27,16 @@ export const MAX_PADDING = 9_999
  * the station would refuse it rather than sending a request that comes back 400.
  */
 export const MIN_DUCK = 0.05
+
+/**
+ * The longest a session title may be. Mirrors `TITLE_MAX_LENGTH` in
+ * `server/src/routes/schedule.ts`; keep the two in step.
+ *
+ * Held here so the field stops where the station would cut, rather than
+ * accepting a sentence and quietly announcing the first eighty characters of
+ * it. The server still cuts: this is the field being honest, not the rule.
+ */
+export const SCHEDULE_TITLE_MAX_LENGTH = 80
 
 /**
  * How often an open mic is renewed, against the station's ten-second lease.
@@ -218,9 +229,19 @@ export class AdminApi {
    * is already up, so changing the hour does not mean finding the image again;
    * see the route, which is where that rule actually lives.
    */
-  async announce(startsAt: number, poster?: File | null): Promise<ScheduledSession | null> {
+  async announce(
+    startsAt: number,
+    poster?: File | null,
+    said: { kind?: SessionKind; title?: string | null } = {},
+  ): Promise<ScheduledSession | null> {
     const body = new FormData()
     body.append('startsAt', String(startsAt))
+    // Always sent, both of them, including when they are empty. Unlike the
+    // poster these are not kept across an edit (see the route) so a form that
+    // left them out would be announcing a set with no title every time somebody
+    // moved the hour of a conversation.
+    body.append('kind', said.kind ?? 'set')
+    body.append('title', said.title ?? '')
     if (poster) body.append('poster', poster, poster.name)
 
     const response = await this.#request('PUT', '/api/schedule', { body })
@@ -302,9 +323,14 @@ export class AdminApi {
    * Both are idempotent at the station, so a double-click is not an error and
    * this needs no guard of its own. Ending a session clears the decks and the
    * queue and closes the room. See `OnAir` on the server.
+   *
+   * `kind` is what sort of night is starting and is only read on `start`: a
+   * session's kind is fixed when it opens, because changing it halfway would
+   * rewrite what the room was told when they walked in. Omitted means a set,
+   * which is what every caller meant before there were two kinds.
    */
-  session(action: 'start' | 'end'): Promise<AirSnapshot> {
-    return this.#json<AirSnapshot>('POST', '/api/session', { action })
+  session(action: 'start' | 'end', kind?: SessionKind): Promise<AirSnapshot> {
+    return this.#json<AirSnapshot>('POST', '/api/session', { action, ...(kind ? { kind } : {}) })
   }
 
   /**

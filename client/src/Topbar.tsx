@@ -1,13 +1,28 @@
 import bellIcon from './assets/icons/bell.svg'
 import broadcastSmallIcon from './assets/icons/broadcast-sm.svg'
+import micStageIcon from './assets/icons/microphone-stage.svg'
 import slidersSmallIcon from './assets/icons/sliders-sm.svg'
 import usersIcon from './assets/icons/users.svg'
 import type { Standing } from './lib/availability.js'
 import { statusLabel } from './lib/availability.js'
+import { kindLabel } from './lib/kind.js'
+import type { SessionKind } from './lib/protocol.js'
 
 export interface TopbarProps {
   /** What the page can see of the station. See lib/availability.ts. */
   reach: Standing
+  /**
+   * What kind of night is on, or null when there is none on.
+   *
+   * Drawn only for a conversation, which looks like favouritism and is the
+   * design: a set is what this station is when nobody says otherwise, so a
+   * badge saying so on every ordinary evening would be a permanent label
+   * carrying no information. The one that changes what you are looking at is
+   * the one worth a mark, and it is carried from every view because somebody
+   * who wandered to `#chat` mid-conversation should not have to go back to the
+   * deck to find out why nothing is playing.
+   */
+  kind: SessionKind | null
   /** Null before the first roster frame: a count nobody has sent is not zero. */
   listeners: number | null
   /** True on the decks, which is what the segmented control is switching. */
@@ -42,7 +57,7 @@ export interface TopbarProps {
  * the width it takes across the top of a phone. What is on the page is the
  * whole of what there is, so the page just shows it.
  */
-export function Topbar({ reach, listeners, admin, nextSession, showConsole }: TopbarProps) {
+export function Topbar({ reach, kind, listeners, admin, nextSession, showConsole }: TopbarProps) {
   return (
     <header className="topbar">
       <div className="topbar__left">
@@ -78,6 +93,16 @@ export function Topbar({ reach, listeners, admin, nextSession, showConsole }: To
             Admin
           </a>
         </div>
+        )}
+
+        {/* What kind of night this is, when it is the kind worth saying. See
+            the prop: a set says nothing, because a set is what the station is
+            by default and a label on every ordinary evening is furniture. */}
+        {kind === 'talk' && (
+          <p className="airkind" data-testid="air-kind">
+            <img src={micStageIcon} alt="" width={14} height={14} />
+            <span className="airkind__word">{kindLabel(kind)}</span>
+          </p>
         )}
 
         {/* Off air only, and quiet. The off-air screen says this properly,

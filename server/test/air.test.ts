@@ -24,24 +24,45 @@ describe('OnAir', () => {
 
   it('starts off air, with no session at all', () => {
     const air = new OnAir({ db })
-    expect(air.snapshot()).toEqual({ live: false, since: null })
+    // No kind either, and that is the same claim as `since` being null: off air
+    // there is no session, so there is nothing for it to be a kind of.
+    expect(air.snapshot()).toEqual({ live: false, since: null, kind: null })
     expect(air.current).toBeNull()
     expect(sessions()).toEqual([])
   })
 
   it('opens a session on going live', () => {
     const air = new OnAir({ db, now: () => 1_700_000_000_000 })
-    expect(air.goLive()).toEqual({ live: true, since: 1_700_000_000_000 })
+    expect(air.goLive()).toEqual({ live: true, since: 1_700_000_000_000, kind: 'set' })
     expect(air.current).not.toBeNull()
-    expect(sessions()).toMatchObject([{ started_at: 1_700_000_000_000, ended_at: null }])
+    expect(sessions()).toMatchObject([
+      { started_at: 1_700_000_000_000, ended_at: null, kind: 'set' },
+    ])
+  })
+
+  it('opens a talk session when that is what is being started', () => {
+    const air = new OnAir({ db, now: () => 1_700_000_000_000 })
+    expect(air.goLive('talk')).toMatchObject({ live: true, kind: 'talk' })
+    // Written down as well as broadcast: the night is what it was, after it.
+    expect(sessions()).toMatchObject([{ kind: 'talk' }])
+  })
+
+  it('will not change the kind of a night already on air', () => {
+    // Going live twice is an admin double-clicking, and the second call is
+    // ignored whole. Rewriting the kind under a room that has already been told
+    // what it walked into is the one thing that would make that call unsafe.
+    const air = new OnAir({ db })
+    air.goLive('talk')
+    expect(air.goLive('set')).toMatchObject({ kind: 'talk' })
+    expect(sessions()).toHaveLength(1)
   })
 
   it('closes it on ending', () => {
     let now = 1_700_000_000_000
     const air = new OnAir({ db, now: () => now })
-    air.goLive()
+    air.goLive('talk')
     now = 1_700_000_060_000
-    expect(air.end()).toEqual({ live: false, since: null })
+    expect(air.end()).toEqual({ live: false, since: null, kind: null })
     expect(sessions()).toMatchObject([
       { started_at: 1_700_000_000_000, ended_at: 1_700_000_060_000 },
     ])
@@ -221,7 +242,7 @@ describe('POST /api/session', () => {
     // thing a listener's page needs, and it is not a secret.
     const res = await harness.app.inject({ method: 'GET', url: '/api/session' })
     expect(res.statusCode).toBe(200)
-    expect(res.json()).toEqual({ live: false, since: null })
+    expect(res.json()).toEqual({ live: false, since: null, kind: null })
   })
 
   it('refuses to go live without the password', async () => {
@@ -261,7 +282,43 @@ describe('POST /api/session', () => {
       payload: { action: 'end' },
       headers: { cookie },
     })
-    expect(res.json()).toEqual({ live: false, since: null })
+    expect(res.json()).toEqual({ live: false, since: null, kind: null })
+  })
+
+  it('starts the kind of night the console asked for', async () => {
+    const cookie = await signIn(harness)
+    const res = await harness.app.inject({
+      method: 'POST',
+      url: '/api/session',
+      payload: { action: 'start', kind: 'talk' },
+      headers: { cookie },
+    })
+    expect(res.json()).toMatchObject({ live: true, kind: 'talk' })
+  })
+
+  it('goes live as a set when no kind is named', async () => {
+    // Which is what a caller written before there were two kinds of night
+    // meant by saying nothing, and what the `qa:` scripts still send.
+    const cookie = await signIn(harness)
+    const res = await harness.app.inject({
+      method: 'POST',
+      url: '/api/session',
+      payload: { action: 'start' },
+      headers: { cookie },
+    })
+    expect(res.json()).toMatchObject({ live: true, kind: 'set' })
+  })
+
+  it('refuses a kind of night it does not have', async () => {
+    const cookie = await signIn(harness)
+    const res = await harness.app.inject({
+      method: 'POST',
+      url: '/api/session',
+      payload: { action: 'start', kind: 'karaoke' },
+      headers: { cookie },
+    })
+    expect(res.statusCode).toBe(400)
+    expect(harness.air.live).toBe(false)
   })
 
   it('refuses an action it does not have', async () => {

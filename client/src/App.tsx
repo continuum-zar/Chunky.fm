@@ -46,6 +46,7 @@ import {
 } from './lib/chat.js'
 import type { Correction } from './lib/drift.js'
 import { playedEarlier, playedLabel } from './lib/history.js'
+import { kindPromise } from './lib/kind.js'
 import {
   isValidNickname,
   loadNickname,
@@ -465,6 +466,10 @@ function Station({ route: requested, session }: { route: Route; session: AdminSe
     const audio = audioRef.current
     if (!audio) return
     audio.muted = false
+    // And the graph, which is where a voice comes out. The element is the music
+    // and nothing else; on a night that is all conversation, unmuting the
+    // element alone would be a button that visibly does nothing.
+    stage.current?.hush(false)
     setMuted(false)
     // A gesture, and the one place a listener reliably makes another one after
     // joining. The OS suspends audio contexts for a call or a lock screen, and
@@ -481,6 +486,10 @@ function Station({ route: requested, session }: { route: Route; session: AdminSe
     const audio = audioRef.current
     if (!audio) return
     audio.muted = true
+    // Both, for the reason in `listen`. The element stays muted as well as the
+    // graph so that a browser with no Web Audio at all keeps the mute it has
+    // always had, on the half of the sound it can hear.
+    stage.current?.hush(true)
     setMuted(true)
   }
 
@@ -551,6 +560,41 @@ function Station({ route: requested, session }: { route: Route; session: AdminSe
   const closed = here === 'off-air'
   // The record turns for exactly one reason: audio is coming out of it.
   const onAir = Boolean(joined && !stranded && !tuning && track && !paused)
+  /**
+   * Whether tonight is a conversation rather than a set.
+   *
+   * Read off the air frame rather than inferred from an empty deck, which is
+   * the whole reason the kind is on the wire: those two look identical and mean
+   * opposite things. During a set, nothing on the decks is a gap between songs
+   * and the page apologises for it. During a conversation it is the ordinary
+   * state of the entire evening, and apologising for it would be the station
+   * telling the room that the thing they came for is a fault.
+   *
+   * It is not a mode. A talk session that puts a record on renders as a record,
+   * through exactly the same branch a set does; this only decides what to say
+   * when there is nothing on.
+   */
+  const talk = air?.kind === 'talk'
+  /**
+   * Whether there is a voice on the air right now.
+   *
+   * Either end of it: the decks' own microphone, or a listener who has been
+   * brought up. Both arrive as their own frames and neither is playback, which
+   * is why a conversation cannot use `onAir`, which is about a record
+   * turning, and on a night with no record it is false all evening.
+   */
+  const voices = Boolean(joined && !stranded && !tuning && (mic?.live || floor?.speaker))
+  /**
+   * Whether this page is on the receiving end of a broadcast at all.
+   *
+   * The difference between this and `onAir` is the difference between the two
+   * kinds of night. For a record, being live *is* the record turning, so the
+   * two are the same thing and `onAir` says it. For a conversation they come
+   * apart: the pause between a question and an answer is not the station going
+   * off the air, and a badge that dropped out of LIVE every time somebody drew
+   * breath would be lying twice a sentence.
+   */
+  const broadcasting = Boolean(joined && !stranded && !tuning && air?.live)
 
   // What the phone says while the page is in a pocket. The same two facts the
   // deck shows, handed to the OS: what is on, and that it is live rather than
@@ -624,6 +668,10 @@ function Station({ route: requested, session }: { route: Route; session: AdminSe
       <div className="station__main">
         <Topbar
           reach={here}
+          // Only while there is a night to describe, and only the console-set
+          // kind: off air this is null, and the bar says nothing rather than
+          // labelling a station that is not on.
+          kind={air?.live ? (air.kind ?? null) : null}
           // What the room is told: who is here, plus whatever the decks have
           // added on top. Null until the first roster, since a count nobody
           // has sent is not zero. See `PresenceMessage`.
@@ -795,6 +843,49 @@ function Station({ route: requested, session }: { route: Route; session: AdminSe
 
                   <Mute muted={muted} onToggle={toggleMute} enabled={Boolean(track)} />
                 </div>
+              ) : talk ? (
+                // A conversation, with nothing on the decks because there is not
+                // meant to be. Everything here is the same furniture the record
+                // gets (the badge, the meter, the mute) pointed at the voices
+                // instead, because to a listener this *is* the broadcast, and a
+                // night that rendered as an apology for an empty deck would be
+                // the station calling its own programme a gap.
+                //
+                // The one thing it does not do is invent a title. There is no
+                // track to read one off and the poster is about the next night,
+                // not this one, so what it says instead is what it can actually
+                // see: whether anybody is talking, and who.
+                <div className="stage stage--talk" data-testid="talk-stage">
+                  {/* LIVE for the whole conversation rather than only while
+                      somebody is mid-sentence: this badge answers "is there a
+                      broadcast", and the meter below answers "is there sound in
+                      it right now". The line beside it names whoever is on the
+                      mic, which is the one thing here that changes minute to
+                      minute. */}
+                  <OnAir
+                    live={broadcasting}
+                    idleLabel="OFF AIR"
+                    talking={voices}
+                    speaker={floor?.speaker?.nickname ?? null}
+                  />
+
+                  <div className="stage__head">
+                    <h2 className="now-playing__title">The conversation</h2>
+                    <p className="now-playing__artist">
+                      {voices
+                        ? 'Everyone in the room is hearing this at the same second.'
+                        : 'Nobody is talking at this moment. Nothing is broken, and nothing is missing.'}
+                    </p>
+                  </div>
+
+                  <Waveform live={voices} />
+
+                  {/* Enabled on being tuned in rather than on there being a
+                      track, which is the whole difference: the thing to mute
+                      here arrives over the talk channel, and the button that
+                      asks about a record would be greyed out all evening. */}
+                  <Mute muted={muted} onToggle={toggleMute} enabled={joined && !stranded} />
+                </div>
               ) : (
                 // The station is there and answering; it just isn't playing
                 // anything. That reads exactly like a broken page unless the
@@ -866,7 +957,7 @@ function Station({ route: requested, session }: { route: Route; session: AdminSe
               </>
             )}
             {route === 'history' && (
-              <Earlier plays={history} currentTrackId={track?.id ?? null} standalone />
+              <Earlier plays={history} currentTrackId={track?.id ?? null} standalone talk={talk} />
             )}
             {route === 'lyrics' && <Lyrics state={state} serverNow={clock.serverNow} />}
           </div>
@@ -941,6 +1032,12 @@ function NextSession({ next }: { next: ScheduledSession }) {
           {nextSessionLabel(next.startsAt, Date.now())}
         </time>
       </p>
+      {/* What the night is, under when it is. The same line the page in front
+          of the station shows, because it is the same announcement and somebody
+          who saw it there and came here should not find less. */}
+      <p className="next__what" data-testid="next-what">
+        {next.title ? `${kindPromise(next.kind)}, ${next.title}` : kindPromise(next.kind)}
+      </p>
     </div>
   )
 }
@@ -982,6 +1079,7 @@ function Earlier({
   plays,
   currentTrackId,
   standalone,
+  talk = false,
 }: {
   plays: Play[]
   currentTrackId: number | null
@@ -991,6 +1089,16 @@ function Earlier({
    * there it says the evening has not started rather than nothing.
    */
   standalone?: boolean
+  /**
+   * Whether tonight is a conversation.
+   *
+   * Only the empty case cares. "Nothing has been on yet this session" is the
+   * right thing to say to somebody waiting for the first record and the wrong
+   * thing to say during a conversation, where an empty shelf is not a night
+   * that has not started: it is a night that is under way and is not about
+   * records. Anything put on during one still lands in the same list.
+   */
+  talk?: boolean
 }) {
   const earlier = playedEarlier(plays, currentTrackId)
   if (earlier.length === 0 && !standalone) return null
@@ -1003,7 +1111,9 @@ function Earlier({
       </div>
       {earlier.length === 0 ? (
         <p className="panel__empty">
-          Nothing has been on yet this session. What plays from here shows up in this list.
+          {talk
+            ? 'No records tonight so far. This one is a conversation, and anything put on during it shows up in this list.'
+            : 'Nothing has been on yet this session. What plays from here shows up in this list.'}
         </p>
       ) : (
         // A shelf rather than a list, and it scrolls rather than capping at

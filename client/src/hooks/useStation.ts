@@ -244,7 +244,9 @@ export function useStation(
           setDecks(message.decks)
         }
         if (message.type === 'state') setState(message)
-        if (message.type === 'air') setAir({ live: message.live, since: message.since })
+        if (message.type === 'air') {
+          setAir({ live: message.live, since: message.since, kind: message.kind })
+        }
         if (message.type === 'schedule') setSchedule(message.schedule)
         if (message.type === 'mic') {
           setMic({ live: message.live, duckTo: message.duckTo, since: message.since })

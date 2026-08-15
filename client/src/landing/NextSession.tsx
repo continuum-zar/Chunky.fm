@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { kindPromise } from '../lib/kind.js'
 import { isUpcoming, nextSessionLabel } from '../lib/schedule.js'
 import { posterUrl, type ScheduledSession } from '../lib/protocol.js'
 import { stationUrl } from '../lib/routes.js'
@@ -49,6 +50,17 @@ export function NextSession() {
 
   const art = posterUrl(next)
   const when = nextSessionLabel(next.startsAt, Date.now())
+  /**
+   * What is being promised, in one line: "A conversation, with Sipho".
+   *
+   * Both halves come from the announcement rather than from this page, which is
+   * the point of them being on it at all: everything else in this section is a
+   * time and a picture, and a stranger deciding whether to turn up on Saturday
+   * is deciding between an evening of records and an evening of somebody
+   * talking. Before these fields existed the page could only ever imply the
+   * first, whichever one it was.
+   */
+  const promise = next.title ? `${kindPromise(next.kind)}, ${next.title}` : kindPromise(next.kind)
 
   return (
     <section className="upcoming" id="next-session">
@@ -61,10 +73,19 @@ export function NextSession() {
           session, and it is often the only place the theme is written down. An
           empty alt on it told a screen reader there was nothing there. The date
           is repeated from the line below because the poster is what a sighted
-          reader reads first, and the alt has to stand where the picture does. */}
+          reader reads first, and the alt has to stand where the picture does,
+          which now includes what kind of night it is. */}
       {art && (
-        <img className="upcoming__poster" src={art} alt={`Poster for the next session, ${when}`} />
+        <img
+          className="upcoming__poster"
+          src={art}
+          alt={`Poster for the next session. ${promise}, ${when}`}
+        />
       )}
+
+      <p className="upcoming__what" data-testid="upcoming-what">
+        {promise}
+      </p>
 
       <p className="upcoming__when">
         <time dateTime={new Date(next.startsAt).toISOString()}>{when}</time>

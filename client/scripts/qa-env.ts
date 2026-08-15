@@ -102,11 +102,14 @@ export function playbackCommand(body: unknown): Promise<unknown> {
  * to hear anything has to say so first. Idempotent at the station, so calling
  * it on an already-live one is free.
  */
-export function goLive(): Promise<unknown> {
+export function goLive(kind: 'set' | 'talk' = 'set'): Promise<unknown> {
   return fetch(`${API_URL}/api/session`, {
     method: 'POST',
     headers: { authorization: `Bearer ${ADMIN_PASSWORD}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ action: 'start' }),
+    // The kind is fixed when the session opens and this call is idempotent, so
+    // a script that wants a conversation has to be the one that opens the
+    // doors: asking for `talk` on a station already running a set gets a set.
+    body: JSON.stringify({ action: 'start', kind }),
   }).then((res) => res.json())
 }
 

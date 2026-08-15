@@ -10,13 +10,22 @@ interface SessionDeps {
 
 interface CommandBody {
   action?: unknown
+  kind?: unknown
 }
 
+/**
+ * `kind` is optional and means `set` when it is missing, which is what every
+ * caller written before there were two kinds of night meant by saying nothing.
+ * It is only read on `start`: a session's kind is decided when it opens and
+ * cannot be changed under a room that has already been told what it walked
+ * into. See `OnAir.goLive`.
+ */
 const BODY_SCHEMA = {
   type: 'object',
   required: ['action'],
   properties: {
     action: { type: 'string', enum: ['start', 'end'] },
+    kind: { type: 'string', enum: ['set', 'talk'] },
   },
 } as const
 
@@ -42,7 +51,10 @@ export function sessionRoutes({ config, air }: SessionDeps): FastifyPluginAsync 
         // Both verbs are idempotent; see OnAir. Ending an already-ended
         // session answers 200 with the same snapshot rather than a conflict:
         // the caller wanted the station off air, and it is.
-        const snapshot = request.body.action === 'start' ? air.goLive() : air.end()
+        const snapshot =
+          request.body.action === 'start'
+            ? air.goLive(request.body.kind === 'talk' ? 'talk' : 'set')
+            : air.end()
         // The websocket broadcast has already gone out by here.
         return reply.code(200).send(snapshot)
       },

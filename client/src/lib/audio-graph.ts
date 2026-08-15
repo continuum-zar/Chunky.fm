@@ -1,9 +1,17 @@
 /**
  * The gain stage the music sits in, so somebody can talk over it.
  *
- *     <audio> ──▶ MediaElementSource ──▶ GainNode ──▶ destination
- *                                            ▲
- *                                        the duck
+ *     <audio> ──▶ MediaElementSource ──▶ GainNode ──▶ ┐
+ *                                            ▲        │
+ *                                        the duck     ├──▶ GainNode ──▶ destination
+ *                                                     │        ▲
+ *     MediaStream ──▶ MediaStreamSource ─────────────▶ ┘    the hush
+ *
+ * Two gains rather than one, and they are not the same control. The duck is the
+ * station's, applied to the music alone, and it is what makes a voice audible
+ * over a record. The hush is this listener's, applied to everything, and it is
+ * the mute button. Folding them together would mean either a mic break this
+ * page could not turn off or a mute that the next duck undid.
  *
  * The station does not mix. Nothing about the music passes through the server,
  * so ducking cannot be a fader there; what arrives instead is a `mic` frame
@@ -26,6 +34,22 @@ const RAMP_TIME_CONSTANT = 0.08
 export interface StationAudio {
   /** Where the music should sit, as a linear gain. Ramped, never jumped. */
   duck(to: number): void
+  /**
+   * This listener's own silence, over everything the station sends.
+   *
+   * `audio.muted` was the whole of muting until there were nights with no
+   * track on at all, and it only ever covered the element: a voice arriving
+   * over the talk channel goes to the graph rather than to the element, so
+   * muting a conversation muted nothing. During a set that was a mic break
+   * somebody could not turn off; during a talk session it is the mute button
+   * doing nothing whatsoever.
+   *
+   * Ramped like the duck, and for the same reason: an instantaneous gain change
+   * is an audible click, and a click reads as a fault rather than a decision.
+   * The element is still muted alongside this, so a browser with no Web Audio
+   * at all keeps the mute it always had.
+   */
+  hush(on: boolean): void
   /**
    * Nudge a suspended context back awake. Cheap and safe to call again; worth
    * calling from anything that is already a user gesture, because a context
@@ -74,6 +98,7 @@ const graphs = new WeakMap<HTMLAudioElement, StationAudio>()
  */
 const DEAF: StationAudio = {
   duck: () => undefined,
+  hush: () => undefined,
   resume: () => undefined,
   play: () => undefined,
   close: () => undefined,
@@ -120,12 +145,18 @@ export function stationAudio(audio: HTMLAudioElement): StationAudio {
 
   let context: AudioContext
   let gain: GainNode
+  let out: GainNode
   try {
     context = new Ctor()
     const source = context.createMediaElementSource(audio)
     gain = context.createGain()
+    // Everything reaches the speakers through this one, which is what makes it
+    // able to be the mute: a voice connected later joins the graph here rather
+    // than at the destination, so it is covered without being ducked.
+    out = context.createGain()
     source.connect(gain)
-    gain.connect(context.destination)
+    gain.connect(out)
+    out.connect(context.destination)
   } catch {
     // Most likely a second source node for this element from a code path that
     // did not come through here. Nothing to recover: the element is already
@@ -143,18 +174,26 @@ export function stationAudio(audio: HTMLAudioElement): StationAudio {
   let sink: HTMLAudioElement | null = null
   let voice: MediaStreamAudioSourceNode | null = null
 
+  /** Move one of the two gains to a level, from wherever it actually is. */
+  const ramp = (node: GainNode, to: number) => {
+    const target = Math.min(1, Math.max(0, to))
+    const now = context.currentTime
+    // Read the value first, then pin it: `gain.value` during an automation is
+    // the level right now, so a duck interrupted halfway (talk, stop, talk
+    // again) ramps on from where it actually is rather than snapping back to
+    // wherever the last ramp was aimed.
+    const current = node.gain.value
+    node.gain.cancelScheduledValues(now)
+    node.gain.setValueAtTime(current, now)
+    node.gain.setTargetAtTime(target, now, RAMP_TIME_CONSTANT)
+  }
+
   const stage: StationAudio = {
     duck(to: number) {
-      const target = Math.min(1, Math.max(0, to))
-      const now = context.currentTime
-      // Read the value first, then pin it: `gain.value` during an automation is
-      // the level right now, so a duck interrupted halfway (talk, stop, talk
-      // again) ramps on from where it actually is rather than snapping back to
-      // wherever the last ramp was aimed.
-      const current = gain.gain.value
-      gain.gain.cancelScheduledValues(now)
-      gain.gain.setValueAtTime(current, now)
-      gain.gain.setTargetAtTime(target, now, RAMP_TIME_CONSTANT)
+      ramp(gain, to)
+    },
+    hush(on: boolean) {
+      ramp(out, on ? 0 : 1)
     },
     resume,
     play(stream: MediaStream | null) {
@@ -174,7 +213,10 @@ export function stationAudio(audio: HTMLAudioElement): StationAudio {
       // audible path either way, so this is the decoder and not the sound.
       void sink.play().catch(() => undefined)
       voice = context.createMediaStreamSource(stream)
-      voice.connect(context.destination)
+      // Into the output gain rather than the destination: past the duck, which
+      // is for the music, and inside the mute, which is for this listener. A
+      // voice wired straight to the destination is one nobody can turn off.
+      voice.connect(out)
     },
     close() {
       graphs.delete(audio)

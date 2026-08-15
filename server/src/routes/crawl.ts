@@ -109,7 +109,14 @@ function llms(base: string): string {
 
 Sessions happen on announced evenings and end when they end. The station is
 deliberately off air in between, and the page in front of it says when the next
-one is.
+one is, and what kind of night it will be.
+
+A session is one of two things. A set is records, chosen by whoever is on the
+decks. A conversation is the same room and the same shared clock with a guest
+brought up onto the air instead: everyone hears the question and the answer at
+the same second, and anyone listening can ask for the mic themselves. Records
+can still go on during one, and the mic can still open during a set; the kind
+says what the night is for.
 
 Everyone tuned in hears the same moment because every browser aligns itself to
 the station's own clock rather than being sent a stream: the audio is played

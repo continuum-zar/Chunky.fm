@@ -148,14 +148,18 @@ const lastTarget = (gain: FakeGain): Call | undefined =>
   [...gain.gain.calls].reverse().find((call) => call[0] === 'target')
 
 describe('stationAudio', () => {
-  it('routes the element through a gain stage on the way to the speakers', () => {
+  it('routes the element through two gain stages on the way to the speakers', () => {
     const audio = element()
     stationAudio(audio)
 
     const context = FakeContext.built[0]!
     expect(context.sources).toBe(1)
-    expect(context.gains).toHaveLength(1)
+    // The duck and the mute. They are separate because they answer to different
+    // people: the station decides where the music sits under a voice, and this
+    // listener decides whether any of it comes out at all.
+    expect(context.gains).toHaveLength(2)
     expect(context.gains[0]!.connected).toBe(1)
+    expect(context.gains[1]!.connected).toBe(1)
   })
 
   it('wakes the context, because a suspended one is silence rather than quiet', () => {
@@ -221,6 +225,7 @@ describe('stationAudio', () => {
     const stage = stationAudio(element())
 
     expect(() => stage.duck(0.2)).not.toThrow()
+    expect(() => stage.hush(true)).not.toThrow()
     expect(() => stage.resume()).not.toThrow()
     expect(() => stage.close()).not.toThrow()
     expect(FakeContext.built).toHaveLength(0)
@@ -237,17 +242,54 @@ describe('stationAudio', () => {
   })
 
   it('plays a voice past the duck, not through it', () => {
-    // The one assertion here that is about how it sounds. The gain node is for
-    // the music; running the voice through it would turn every mic break into
-    // somebody talking quietly over quiet music.
+    // The one assertion here that is about how it sounds. The first gain node is
+    // for the music; running the voice through it would turn every mic break
+    // into somebody talking quietly over quiet music.
     const audio = element()
     const stage = stationAudio(audio)
     const context = FakeContext.built[0]!
     stage.play({} as MediaStream)
 
     const voice = context.streamSources[0]!
-    expect(voice.connectedTo).toEqual([context.destination])
     expect(voice.connectedTo).not.toContain(context.gains[0])
+  })
+
+  it('plays a voice inside the mute, so a listener can turn a conversation off', () => {
+    // The other half of the same wiring, and the reason it is not the
+    // destination any more. A voice connected straight to the speakers is one
+    // this page has no control over, which was a mic break nobody could mute
+    // during a set, and on a night that is nothing but voices is the mute
+    // button doing nothing at all.
+    const stage = stationAudio(element())
+    const context = FakeContext.built[0]!
+    stage.play({} as MediaStream)
+
+    expect(context.streamSources[0]!.connectedTo).toEqual([context.gains[1]])
+  })
+
+  it('mutes and unmutes on a ramp, like everything else here', () => {
+    const stage = stationAudio(element())
+    const out = FakeContext.built[0]!.gains[1]!
+
+    stage.hush(true)
+    expect(lastTarget(out)).toEqual(['target', 0, 0, expect.any(Number)])
+    stage.hush(false)
+    expect(lastTarget(out)).toEqual(['target', 1, 0, expect.any(Number)])
+  })
+
+  it('keeps the mute and the duck apart', () => {
+    // Muted, then a break starts and ends. The duck moves the music; the mute
+    // must still be where the listener left it, or the station would be able to
+    // turn somebody's sound back on by talking.
+    const stage = stationAudio(element())
+    const [music, out] = FakeContext.built[0]!.gains as [FakeGain, FakeGain]
+
+    stage.hush(true)
+    stage.duck(0.2)
+    stage.duck(1)
+
+    expect(lastTarget(music)).toEqual(['target', 1, 0, expect.any(Number)])
+    expect(lastTarget(out)).toEqual(['target', 0, 0, expect.any(Number)])
   })
 
   it('parks the voice on a muted element as well, or Chrome never decodes it', () => {

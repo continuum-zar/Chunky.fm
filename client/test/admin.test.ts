@@ -318,6 +318,58 @@ describe('going on and off air', () => {
     expect(await api().session('end')).toEqual({ live: false, since: null })
     expect(JSON.parse(String(calls[0]?.init.body))).toEqual({ action: 'end' })
   })
+
+  it('says what kind of night is starting, when it is not the usual one', async () => {
+    respond = () => json({ live: true, since: 1, kind: 'talk' })
+    await api().session('start', 'talk')
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({ action: 'start', kind: 'talk' })
+  })
+
+  it('leaves the kind out rather than guessing it', async () => {
+    // Absent means a set at the station, which is what every caller written
+    // before there were two kinds of night meant by saying nothing. Sending
+    // `kind: undefined` would be this class inventing an answer for them.
+    respond = () => json({ live: false, since: null })
+    await api().session('end', undefined)
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({ action: 'end' })
+  })
+})
+
+describe('announcing the next session', () => {
+  /** The multipart body as a map of the fields it carries. */
+  function fields(body: unknown): Record<string, string> {
+    const form = body as FormData
+    const out: Record<string, string> = {}
+    for (const [name, value] of form.entries()) {
+      if (typeof value === 'string') out[name] = value
+    }
+    return out
+  }
+
+  it('carries the kind and the title beside the time', async () => {
+    respond = () => json({ schedule: null })
+    await api().announce(1_700_500_000_000, null, { kind: 'talk', title: 'Sipho' })
+
+    expect(calls[0]?.url).toBe('/api/schedule')
+    expect(fields(calls[0]?.init.body)).toEqual({
+      startsAt: '1700500000000',
+      kind: 'talk',
+      title: 'Sipho',
+    })
+  })
+
+  it('sends both of them even when they are empty', async () => {
+    // Unlike the poster, these are not kept across an edit at the station, so a
+    // form that left them out would announce a set with no title every time
+    // somebody moved the hour of a conversation.
+    respond = () => json({ schedule: null })
+    await api().announce(1_700_500_000_000)
+    expect(fields(calls[0]?.init.body)).toEqual({
+      startsAt: '1700500000000',
+      kind: 'set',
+      title: '',
+    })
+  })
 })
 
 describe('muting a nickname', () => {

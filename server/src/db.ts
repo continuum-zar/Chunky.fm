@@ -28,12 +28,32 @@ export interface LyricsRow {
   fetched_at: number
 }
 
+/**
+ * What kind of night a session is.
+ *
+ * `set` is the station as it has always been: records, chosen by whoever is on
+ * the decks, with the room around them. `talk` is the same room and the same
+ * clock with a conversation in the middle of it instead of a tracklist.
+ *
+ * Two values rather than a boolean called `isTalk`, because the two are peers:
+ * neither is the other one turned off. And a closed set of two rather than free
+ * text, because everything downstream switches on it, and a third kind that
+ * only the database knew about would reach the listener page as a night that
+ * renders as neither.
+ *
+ * What it does *not* do is decide what may happen. A talk session can put a
+ * record on and a set can open the mic; the kind says what the night is for, so
+ * the page can lead with the right thing, and nothing about it is a lock.
+ */
+export type SessionKind = 'set' | 'talk'
+
 /** A stretch of the station being on air. See `openSession`. */
 export interface SessionRow {
   id: number
   started_at: number
   /** Null while the session is the current one. */
   ended_at: number | null
+  kind: SessionKind
 }
 
 /** The next session, as announced. One row at most. See the schema note. */
@@ -42,6 +62,9 @@ export interface ScheduleRow {
   starts_at: number
   poster: string | null
   set_at: number
+  kind: SessionKind
+  /** What the night is called, or null for a time and a poster alone. */
+  title: string | null
 }
 
 export interface MessageRow {
@@ -113,7 +136,16 @@ CREATE TABLE IF NOT EXISTS lyrics (
 CREATE TABLE IF NOT EXISTS sessions (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   started_at  INTEGER NOT NULL,
-  ended_at    INTEGER
+  ended_at    INTEGER,
+  -- What kind of night this was. Constrained here as well as in the type, the
+  -- same argument the wishes' status column makes: a kind nothing can render is
+  -- a session the listener page would draw as neither one thing nor the other,
+  -- and the column outlives every process that wrote to it.
+  --
+  -- Defaulted, and that is what makes this safe to add to a station that has
+  -- been running: every session written before there were two kinds was a set,
+  -- which is true rather than a convenient assumption.
+  kind        TEXT    NOT NULL DEFAULT 'set' CHECK (kind IN ('set', 'talk'))
 );
 
 -- The next session, announced before it happens. One row, ever: the id = 1
@@ -129,7 +161,15 @@ CREATE TABLE IF NOT EXISTS schedule (
   -- The poster's filename under the config's posterDir, or null for a time
   -- with no picture behind it.
   poster      TEXT,
-  set_at      INTEGER NOT NULL
+  set_at      INTEGER NOT NULL,
+  -- What is being announced, on the same two values a session runs under. A
+  -- promise about a night has to be able to say which kind of night, or the
+  -- page in front of the station advertises every conversation as a set.
+  kind        TEXT    NOT NULL DEFAULT 'set' CHECK (kind IN ('set', 'talk')),
+  -- What it is called: "Songs that sound like forgiveness", or the name of
+  -- whoever is coming on. Null for a time and a picture and nothing else, which
+  -- is what an announcement was until now and is still a real one.
+  title       TEXT
 );
 
 CREATE TABLE IF NOT EXISTS messages (
@@ -210,8 +250,8 @@ export interface SessionRef {
  * session; when the admin can start and end them by hand, messages will scope
  * themselves to those instead, and nothing here has to change to allow it.
  */
-export function openSession(db: Db, now = Date.now()): number {
-  const result = db.prepare('INSERT INTO sessions (started_at) VALUES (?)').run(now)
+export function openSession(db: Db, now = Date.now(), kind: SessionKind = 'set'): number {
+  const result = db.prepare('INSERT INTO sessions (started_at, kind) VALUES (?, ?)').run(now, kind)
   return Number(result.lastInsertRowid)
 }
 
@@ -223,6 +263,40 @@ export function closeSession(db: Db, sessionId: number, now = Date.now()): void 
   )
 }
 
+/**
+ * Columns added to tables that already exist somewhere.
+ *
+ * `CREATE TABLE IF NOT EXISTS` is the whole of the schema above, which is a
+ * perfectly good way to build a database and no way at all to change one: the
+ * statement is a no-op against a table that is already there, so a column added
+ * to the text above simply never appears on the station that has been running
+ * since before it was written. The first read after a deploy then fails on a
+ * column that exists in every test and in nobody's data directory.
+ *
+ * So each of these is stated twice on purpose: once in `SCHEMA`, which is what a
+ * fresh database is built from and what somebody reads to learn the shape, and
+ * once here, which is what an existing one is brought up to. The pair has to
+ * agree. If they ever disagree the tests will not notice, because tests start
+ * from an empty file where only the first half runs.
+ *
+ * Idempotent by inspection rather than by catching an error: `ALTER TABLE` is
+ * not conditional in SQLite, and a swallowed exception here would hide a
+ * genuinely broken migration behind the one it is expected to throw.
+ */
+const ADDED_COLUMNS: [table: string, column: string, spec: string][] = [
+  ['sessions', 'kind', "TEXT NOT NULL DEFAULT 'set' CHECK (kind IN ('set', 'talk'))"],
+  ['schedule', 'kind', "TEXT NOT NULL DEFAULT 'set' CHECK (kind IN ('set', 'talk'))"],
+  ['schedule', 'title', 'TEXT'],
+]
+
+function migrate(db: Db): void {
+  for (const [table, column, spec] of ADDED_COLUMNS) {
+    const columns = db.pragma(`table_info(${table})`) as { name: string }[]
+    if (columns.some((existing) => existing.name === column)) continue
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${spec}`)
+  }
+}
+
 export function openDb(dbPath: string): Db {
   if (dbPath !== ':memory:') {
     fs.mkdirSync(path.dirname(dbPath), { recursive: true })
@@ -231,5 +305,6 @@ export function openDb(dbPath: string): Db {
   db.pragma('journal_mode = WAL')
   db.pragma('foreign_keys = ON')
   db.exec(SCHEMA)
+  migrate(db)
   return db
 }

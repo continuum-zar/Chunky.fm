@@ -229,8 +229,12 @@ function kindOf(payload: unknown): string {
   return typeof kind === 'string' ? kind : 'unknown'
 }
 
-/** What a station with no `air` of its own reports: always broadcasting. */
-const ALWAYS_ON: AirSnapshot = { live: true, since: null }
+/**
+ * What a station with no `air` of its own reports: always broadcasting, and a
+ * set, because a station that cannot be asked what kind of night it is having
+ * is having the one it has always had.
+ */
+const ALWAYS_ON: AirSnapshot = { live: true, since: null, kind: 'set' }
 
 /**
  * What a station with no `mic` reports: nobody talking, and the depth the

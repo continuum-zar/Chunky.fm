@@ -6,6 +6,7 @@ import type { MicSnapshot } from './mic.js'
 import type { PlaybackSnapshot } from './playback.js'
 import { type Listener, normalizeNickname } from './presence.js'
 import type { QueueEntry } from './queue.js'
+import type { ScheduledSession } from './schedule.js'
 import { type Wish, WISH_MAX_LENGTH, normalizeWishText } from './wishes.js'
 
 /**
@@ -97,10 +98,16 @@ export type AirMessage = AirSnapshot & { type: 'air' }
  * under `/api/poster/`, or null for a time with no picture behind it. Unlike
  * everything else on this socket the same thing is readable over HTTP without a
  * key: see `scheduleRoutes`.
+ *
+ * It carries the announcement whole rather than a hand-written subset of it, so
+ * a field added to `ScheduledSession` reaches the off-air screen and the page in
+ * front of the station by the same route and at the same time. The two used to
+ * be spelled out separately here and the socket quietly said less than the HTTP
+ * read did, which is exactly the kind of drift nothing fails on.
  */
 export interface ScheduleMessage {
   type: 'schedule'
-  schedule: { startsAt: number; poster: string | null } | null
+  schedule: ScheduledSession | null
 }
 
 /**

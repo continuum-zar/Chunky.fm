@@ -678,13 +678,33 @@ would refuse.
 
 | | |
 |---|---|
-| `GET /api/session` | Open. `{live, since}`: whether the station is broadcasting, and since when. |
-| `POST /api/session` | Admin. `{action: 'start'\|'end'}` → the state it produced. Both idempotent. |
+| `GET /api/session` | Open. `{live, since, kind}`: whether the station is broadcasting, since when, and what kind of night it is. |
+| `POST /api/session` | Admin. `{action: 'start'\|'end', kind?: 'set'\|'talk'}` → the state it produced. Both idempotent. |
 
 PLAN.md locks availability as session-based ("you go live, you end it") and
 `POST /api/session` is the whole of it. `{"action":"start"}` opens a session,
 `{"action":"end"}` closes it. Both are behind the admin gate, and both are
 idempotent: an admin double-clicking is the ordinary case, not an error.
+
+A session has a **kind**, and there are two: `set` is records with the room
+around them, `talk` is the same room and the same shared clock with a
+conversation in the middle of it. It is chosen when the station goes on and
+cannot be changed afterwards, because changing it halfway would rewrite what
+the room was told when they walked in; the way to change it is to end the
+session and start the other one, which is also the only way that gives the new
+night its own chat and its own history. `kind` is optional on the way in and
+means `set` when it is missing, so every caller written before there were two
+kinds still means what it always meant. Off air, `kind` reads `null` rather
+than `set`, for the same reason `since` does: there is no session to have one.
+
+Neither kind forbids the other's furniture. A talk session can put a record on,
+and a set has always been able to open the mic. What the kind decides is what
+the listener's page leads with when there is nothing on the decks: during a set
+that is a gap between songs and the page says so, and during a conversation it
+is the ordinary state of the whole evening, so the page shows the badge, the
+level meter and the mute pointed at the voices instead. Those two look
+identical in a playback snapshot, which is why this is on the air frame rather
+than inferred.
 
 `GET /api/session` is deliberately **open**. Whether there is a station tonight
 is the first thing a listener's page needs, it is not a secret, and it arrives
@@ -1751,10 +1771,17 @@ things being said:
   into, and the click would be spent on silence. See [going live](#going-live).
 - **There, and quiet.** The station is on air with nothing on the decks. The
   page says both halves: nothing is on, and you are tuned in for whatever is.
+- **There, and talking.** The station is on air with nothing on the decks and
+  the night is a `talk` session, so an empty deck is the programme rather than a
+  gap in it. The page keeps the badge, the level meter and the mute, pointed at
+  the voices, and says who is on the mic. See [going live](#going-live).
 
 The last two look identical in a playback snapshot (an empty deck either way)
 which is exactly why `air` is its own frame rather than something derived from
-`state`. And the first two are about the *socket* while the third is about the
+`state`. The last two of *those* are the same again, down to the frame, which
+is why `air` carries the session's kind: same empty deck, opposite meaning, and
+the difference between a station apologising for silence and a station
+broadcasting a conversation. And the first two are about the *socket* while the third is about the
 *station*, so `standing()` folds the two questions into the one sentence a
 screen can show. Connectivity wins when they disagree: a page that cannot reach
 the station does not know whether anyone is on air, and the last thing it heard

@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events'
-import { type Db, type SessionRef, closeSession, openSession } from './db.js'
+import { type Db, type SessionKind, type SessionRef, closeSession, openSession } from './db.js'
 
 /**
  * Whether the station is on air, and the session that is open while it is.
@@ -32,6 +32,21 @@ export interface AirSnapshot {
    * without having to have been there when it started.
    */
   since: number | null
+  /**
+   * What kind of night this is, and null while there is no night.
+   *
+   * Null rather than defaulting to `set` off air, for the reason `since` is
+   * null there: the page would otherwise be told the station is running a set
+   * that does not exist, and something would eventually believe it. Off air has
+   * no kind, because there is no session to have one.
+   *
+   * It travels with `live` rather than with the playback state because it
+   * belongs to the session and changes exactly when the session does. A
+   * listener arriving mid-conversation is handed it in the same frame that
+   * tells them the station is on, which is what lets the page lead with the
+   * conversation instead of an empty deck.
+   */
+  kind: SessionKind | null
 }
 
 export interface OnAirOptions {
@@ -65,12 +80,13 @@ export class OnAir extends EventEmitter implements SessionRef {
   readonly #now: () => number
   #sessionId: number | null = null
   #since: number | null = null
+  #kind: SessionKind | null = null
 
   constructor({ db, now = Date.now, live = false }: OnAirOptions) {
     super()
     this.#db = db
     this.#now = now
-    if (live) this.#open()
+    if (live) this.#open('set')
   }
 
   /** The open session, or null while off air. This is the `SessionRef`. */
@@ -83,20 +99,28 @@ export class OnAir extends EventEmitter implements SessionRef {
   }
 
   snapshot(): AirSnapshot {
-    return { live: this.live, since: this.#since }
+    return { live: this.live, since: this.#since, kind: this.#kind }
   }
 
   /**
-   * Go on air, opening a session.
+   * Go on air, opening a session of a kind.
    *
    * Idempotent, and silent when it changes nothing: going live twice must not
    * open a second session, or the first one would be left with no `ended_at`
    * forever and the chat would move to a room nobody is in. An admin
    * double-clicking the button is the ordinary case, not an error.
+   *
+   * Which means the kind is decided once, at the moment the station goes on,
+   * and the second call is ignored along with everything else about it. That is
+   * deliberate rather than a gap: changing what kind of night it is halfway
+   * through would rewrite what the room was told when they walked in, and the
+   * honest way to do it is to end the session and start the other one, which is
+   * also the only way that gives the new night its own chat and its own
+   * history. Defaulted, so every existing caller means what it always meant.
    */
-  goLive(): AirSnapshot {
+  goLive(kind: SessionKind = 'set'): AirSnapshot {
     if (this.live) return this.snapshot()
-    this.#open()
+    this.#open(kind)
     return this.#changed()
   }
 
@@ -114,6 +138,7 @@ export class OnAir extends EventEmitter implements SessionRef {
     closeSession(this.#db, this.#sessionId as number, this.#now())
     this.#sessionId = null
     this.#since = null
+    this.#kind = null
     return this.#changed()
   }
 
@@ -130,12 +155,14 @@ export class OnAir extends EventEmitter implements SessionRef {
     closeSession(this.#db, this.#sessionId as number, this.#now())
     this.#sessionId = null
     this.#since = null
+    this.#kind = null
   }
 
-  #open(): void {
+  #open(kind: SessionKind): void {
     const at = this.#now()
-    this.#sessionId = openSession(this.#db, at)
+    this.#sessionId = openSession(this.#db, at, kind)
     this.#since = at
+    this.#kind = kind
   }
 
   #changed(): AirSnapshot {

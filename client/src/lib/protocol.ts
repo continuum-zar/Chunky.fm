@@ -88,9 +88,29 @@ export interface AirMessage {
   live: boolean
   /** Server epoch ms at which this stretch on air began; null while off. */
   since: number | null
+  /**
+   * Which kind of night this is, and null while there is no night.
+   *
+   * A fourth thing a page can be looking at, and the one the sentences above
+   * were quietly wrong about: a station on air with nothing on the decks is a
+   * gap between songs during a set, and during a conversation it is the
+   * ordinary state of the whole evening. Same empty deck, opposite meaning, and
+   * nothing before this frame carried the difference.
+   */
+  kind: SessionKind | null
 }
 
-/** The same pair as it comes back from `/api/session`, without the frame. */
+/**
+ * What kind of night a session is. See the server's `db.ts`, which owns this.
+ *
+ * `set` is records with the room around them. `talk` is the same room and the
+ * same shared clock with a conversation in the middle of it. Neither forbids
+ * the other's furniture: a talk session can put a record on, and a set has
+ * always been able to open the mic.
+ */
+export type SessionKind = 'set' | 'talk'
+
+/** The same three as they come back from `/api/session`, without the frame. */
 export type AirSnapshot = Omit<AirMessage, 'type'>
 
 /**
@@ -345,6 +365,16 @@ export function refusalAbout(
 export interface ScheduledSession {
   startsAt: number
   poster: string | null
+  /**
+   * Which kind of night is being promised.
+   *
+   * A poster for a conversation and a poster for a set advertise different
+   * evenings, and this is the field that lets the page in front of the station
+   * say which. Before it, every announcement said "records" by omission.
+   */
+  kind: SessionKind
+  /** The theme, or who is coming on. Null for a time and a picture alone. */
+  title: string | null
 }
 
 export interface ScheduleMessage {

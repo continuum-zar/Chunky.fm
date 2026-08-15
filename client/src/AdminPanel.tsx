@@ -19,11 +19,13 @@ import {
   MIC_HANGOVER_MS,
   MIC_RENEW_MS,
   MIN_DUCK,
+  SCHEDULE_TITLE_MAX_LENGTH,
   type AdminApi,
   type PlaybackCommand,
   type WishBook,
 } from './lib/admin.js'
 import { formatTime } from './lib/chat.js'
+import { kindLabel, kindPromise } from './lib/kind.js'
 import { expectedPositionSeconds, formatClock } from './lib/position.js'
 import { inviteLink } from './lib/invite.js'
 import { fromLocalInput, nextSessionLabel, toLocalInput } from './lib/schedule.js'
@@ -38,6 +40,7 @@ import type {
   ServerMessage,
   QueueEntry,
   ScheduledSession,
+  SessionKind,
   StateMessage,
   Track,
 } from './lib/protocol.js'
@@ -471,7 +474,8 @@ function Controls({
     [applyQueue, run],
   )
   const setAir = useCallback(
-    (action: 'start' | 'end') => run(async () => applyAir(await api.session(action))),
+    (action: 'start' | 'end', kind?: SessionKind) =>
+      run(async () => applyAir(await api.session(action, kind))),
     [api, applyAir, run],
   )
   const mute = useCallback(
@@ -687,8 +691,8 @@ function Controls({
           <ScheduleCard
             schedule={schedule}
             busy={busy}
-            onAnnounce={(startsAt, poster) =>
-              run(async () => applySchedule(await api.announce(startsAt, poster)))
+            onAnnounce={(startsAt, poster, said) =>
+              run(async () => applySchedule(await api.announce(startsAt, poster, said)))
             }
             onTakeDown={() => run(async () => applySchedule(await api.unannounce()))}
           />
@@ -1605,6 +1609,13 @@ function Headcount({
   )
 }
 
+/** What an announcement says about itself, beside its time and its picture. */
+interface Announced {
+  kind: SessionKind
+  /** As typed. Trimmed, capped and turned into null by the station. */
+  title: string
+}
+
 /**
  * The next session, announced before it happens.
  *
@@ -1622,6 +1633,10 @@ function Headcount({
  * matters: leaving the file alone and changing the hour keeps the picture. An
  * admin moving a session by an hour from a phone should not have to find the
  * image again.
+ *
+ * The kind and the title are not treated that way, and the difference is worth
+ * knowing: they are sent on every announcement, empty or not, so clearing a
+ * title clears it. Only the file is expensive enough to be worth a rule.
  */
 function ScheduleCard({
   schedule,
@@ -1631,7 +1646,7 @@ function ScheduleCard({
 }: {
   schedule: ScheduledSession | null
   busy: boolean
-  onAnnounce(startsAt: number, poster: File | null): void
+  onAnnounce(startsAt: number, poster: File | null, said: Announced): void
   onTakeDown(): void
 }) {
   // Seeded from what is announced, and re-seeded when that changes underneath,
@@ -1639,11 +1654,30 @@ function ScheduleCard({
   const [when, setWhen] = useState(() => (schedule ? toLocalInput(schedule.startsAt) : ''))
   const [poster, setPoster] = useState<File | null>(null)
   const [over, setOver] = useState(false)
+  const [kind, setKind] = useState<SessionKind>(() => schedule?.kind ?? 'set')
+  const [title, setTitle] = useState(() => schedule?.title ?? '')
   const announced = schedule?.startsAt ?? null
   useEffect(() => {
     setWhen(announced === null ? '' : toLocalInput(announced))
     setPoster(null)
   }, [announced])
+
+  /*
+   * The other two fields follow whatever is announced, on their own signal.
+   *
+   * Separate from the effect above because they change without the time
+   * changing: renaming a night or turning it from a set into a conversation
+   * leaves `startsAt` exactly where it was, and folding these into that effect
+   * would leave the two fields showing the last thing this tab typed while the
+   * station held something else. Keyed on the values themselves so that a
+   * second console, or a take-down, is followed here too.
+   */
+  const announcedKind = schedule?.kind ?? null
+  const announcedTitle = schedule?.title ?? null
+  useEffect(() => {
+    setKind(announcedKind ?? 'set')
+    setTitle(announcedTitle ?? '')
+  }, [announcedKind, announcedTitle])
 
   // What a picked file looks like, before it has been anywhere. Revoked on the
   // way out: an object URL pins the file in memory until it is let go, and an
@@ -1683,7 +1717,7 @@ function ScheduleCard({
         className="schedule__form"
         onSubmit={(event) => {
           event.preventDefault()
-          if (startsAt !== null) onAnnounce(startsAt, poster)
+          if (startsAt !== null) onAnnounce(startsAt, poster, { kind, title })
         }}
       >
         {/* The poster is both the preview and the way to change it: the whole
@@ -1756,16 +1790,61 @@ function ScheduleCard({
           />
         </label>
 
+        {/* What kind of night is being promised. On the poster rather than only
+            on the night itself, because the two are announced to different
+            people at different times: this one is read by somebody deciding
+            whether to turn up, and "a conversation" and "a set" are not the
+            same decision. It is also independent of what actually gets started
+            on the night; a plan is not a session. */}
+        <div className="schedule__field">
+          <span className="schedule__label" id="schedule-kind-label">
+            What
+          </span>
+          <div className="schedule__kinds" role="group" aria-labelledby="schedule-kind-label">
+            {(['set', 'talk'] as const).map((option) => (
+              <button
+                key={option}
+                type="button"
+                className={`golive__kind${kind === option ? ' golive__kind--on' : ''}`}
+                data-testid={`schedule-kind-${option}`}
+                aria-pressed={kind === option}
+                onClick={() => setKind(option)}
+              >
+                {kindLabel(option)}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <label className="schedule__field">
+          <span className="schedule__label">Called</span>
+          <input
+            type="text"
+            className="gate__input"
+            value={title}
+            maxLength={SCHEDULE_TITLE_MAX_LENGTH}
+            placeholder={kind === 'talk' ? 'Who is coming on' : 'The theme, if there is one'}
+            onChange={(event) => setTitle(event.target.value)}
+            data-testid="schedule-title"
+          />
+        </label>
+
         <button type="submit" className="button" disabled={busy || startsAt === null}>
           {schedule ? 'Update' : 'Announce'}
         </button>
 
         {/* The sentence a listener will actually read, checked against the
             field rather than against what was saved: the point of showing it is
-            to catch a date typed as next year before it is announced. */}
+            to catch a date typed as next year before it is announced. It says
+            the whole line now, because the kind and the title go on the same
+            poster and a preview of one third of it is a preview of nothing. */}
         {startsAt !== null && (
           <p className="schedule__preview" data-testid="schedule-preview">
-            Listeners see: <strong>{nextSessionLabel(startsAt, Date.now())}</strong>
+            Listeners see:{' '}
+            <strong>
+              {kindPromise(kind)}
+              {title.trim() ? `, ${title.trim()}` : ''}. {nextSessionLabel(startsAt, Date.now())}
+            </strong>
           </p>
         )}
       </form>
@@ -1793,9 +1872,18 @@ function OnAirSwitch({
 }: {
   air: AirSnapshot | null
   busy: boolean
-  onSet(action: 'start' | 'end'): void
+  onSet(action: 'start' | 'end', kind?: SessionKind): void
 }) {
   const [confirming, setConfirming] = useState(false)
+  /**
+   * Which kind of night the next one is, while it is still being decided.
+   *
+   * Held here rather than beside the session because it is not a fact about the
+   * station: it is the state of a control that has not been pressed yet. Once
+   * the button goes, the answer is `air.kind` and this stops meaning anything,
+   * which is why nothing reads it while the station is live.
+   */
+  const [starting, setStarting] = useState<SessionKind>('set')
 
   // Not yet known. See the note above: no guessing which way round it is.
   if (air === null) {
@@ -1809,17 +1897,40 @@ function OnAirSwitch({
   // The white pill, not a red one: red on this page means "on the air right
   // now" and nothing else, and a button wearing it before anything is on would
   // be the second bright thing the design does not allow.
+  //
+  // Two controls in one now: what kind of night, and start it. They are next to
+  // each other rather than a choice that appears after the click, because a
+  // dialog between deciding to go live and going live is a dialog somebody
+  // dismisses at ten past nine with a room waiting, and the kind cannot be
+  // changed afterwards. The default is a set, so the ordinary evening is still
+  // one press of one button.
   if (!air.live) {
     return (
-      <button
-        type="button"
-        className="button"
-        data-testid="go-live"
-        disabled={busy}
-        onClick={() => onSet('start')}
-      >
-        Go live
-      </button>
+      <span className="golive">
+        <span className="golive__kinds" role="group" aria-label="What kind of night">
+          {(['set', 'talk'] as const).map((kind) => (
+            <button
+              key={kind}
+              type="button"
+              className={`golive__kind${starting === kind ? ' golive__kind--on' : ''}`}
+              data-testid={`kind-${kind}`}
+              aria-pressed={starting === kind}
+              onClick={() => setStarting(kind)}
+            >
+              {kindLabel(kind)}
+            </button>
+          ))}
+        </span>
+        <button
+          type="button"
+          className="button"
+          data-testid="go-live"
+          disabled={busy}
+          onClick={() => onSet('start', starting)}
+        >
+          Go live
+        </button>
+      </span>
     )
   }
 
