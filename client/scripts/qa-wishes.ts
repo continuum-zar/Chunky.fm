@@ -54,8 +54,13 @@ const browser = await chromium.launch({
 })
 
 try {
-  const sam = await openPage(browser, STATION_URL)
-  const ana = await openPage(browser, STATION_URL)
+  // At `#wishes`, which is where the composer is. The landing view is the
+  // record and the words to it and nothing else; asking for something is a
+  // destination on the rail, with the whole screen and what you have already
+  // asked for listed under it. The join form still renders whatever the
+  // address says, so tuning in below works from here.
+  const sam = await openPage(browser, `${STATION_URL}#wishes`)
+  const ana = await openPage(browser, `${STATION_URL}#wishes`)
   await tuneIn(sam, 'sam')
   await tuneIn(ana, 'ana')
   await wait(1_000)

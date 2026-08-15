@@ -193,6 +193,15 @@ async function decks(browser: Browser, listening = false): Promise<Page> {
 
 /** Raise a hand and have the console answer it. */
 async function askedUp(guest: Page, console_: Page): Promise<void> {
+  // The hand is at `#wishes`: asking to say something is the same kind of act
+  // as asking for a record — a private request to whoever runs the decks — and
+  // the landing view is the record and the words to it alone. Nothing after
+  // this cares where the page is, because everything it raises is a banner
+  // above every view at every width. See `CallIn`.
+  await guest.evaluate(() => {
+    window.location.hash = 'wishes'
+  })
+  await wait(200)
   await guest.click('[data-testid=hand-toggle]')
   await wait(600)
   await console_.locator('[data-testid=floor-hands] button').first().click()

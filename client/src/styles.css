@@ -56,24 +56,32 @@ h2 {
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 24px;
+  gap: 28px;
   min-width: 0;
-  padding: 24px;
+  padding: 28px;
 }
 
-/* The two columns of the design: the deck a shade wider than the aside beside
-   it, and a single stack once there is no room for two. */
+/* The two things the landing view is: the record on the left, the words to it
+   on the right, and a single stack once there is no room for two.
+ *
+ * The left column is the deck's own width rather than a share of the page. It
+ * used to be 1.11fr against the aside's 1fr, which was right when four panels
+ * stacked under the deck and needed the room; with the deck alone in it, a
+ * proportional column left the record floating in the middle of six hundred
+ * pixels of nothing with the words pushed away to the far side of the monitor.
+ * Pinned to its own size, the two sit together and the sheet takes whatever is
+ * left, up to a measure you can still read across. */
 .station__columns {
   display: grid;
-  grid-template-columns: minmax(0, 1.11fr) minmax(0, 1fr);
-  gap: 32px;
+  grid-template-columns: minmax(0, 400px) minmax(0, 720px);
+  gap: 48px;
   align-items: start;
 }
 
 .column {
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 28px;
   min-width: 0;
 }
 
@@ -257,10 +265,13 @@ h2 {
 
 /* Two links dressed as one control. Which side is lit comes from the address,
    so there is no state here to fall out of step with what is rendered. */
+/* The three things in the top bar's right-hand half — this, the headcount and
+   the bell — are one row of chips, so they are all `--control` tall and sit on
+   one line rather than at three different heights. */
 .segmented {
   display: flex;
   gap: 0;
-  padding: 4px;
+  padding: 3px;
   border-radius: var(--pill);
   background: var(--panel);
   box-shadow: var(--ring);
@@ -270,8 +281,10 @@ h2 {
   display: flex;
   align-items: center;
   gap: 6px;
-  height: 30px;
-  padding: 6px 12px;
+  /* Less the 3px of padding either side of it, so the control as a whole
+     stands exactly as tall as the two chips beside it. */
+  height: calc(var(--control) - 6px);
+  padding: 0 14px;
   border-radius: var(--pill);
   color: var(--muted);
   font-size: 12px;
@@ -302,8 +315,8 @@ h2 {
   align-items: center;
   gap: 8px;
   margin: 0;
-  height: 31.5px;
-  padding: 6px 12px;
+  height: var(--control);
+  padding: 0 14px;
   border-radius: var(--pill);
   background: var(--panel);
   box-shadow: var(--ring);
@@ -335,8 +348,8 @@ h2 {
   position: relative;
   display: grid;
   place-items: center;
-  width: 36px;
-  height: 36px;
+  width: var(--control);
+  height: var(--control);
   margin: 0;
   border-radius: var(--pill);
   background: var(--panel);
@@ -748,13 +761,32 @@ h2 {
   transition: opacity 0.45s ease, transform 0.45s ease;
 }
 
-/* A phone reads the words on the #lyrics view, where the screen is the sheet:
-   smaller type, or three long lines are the whole page. 720 is the same line
-   useNarrow draws, quoted for the same reason the other queries quote it. */
+/* A phone reads the words smaller, or three long lines are the whole page.
+   720 is the width this file draws its phone line at everywhere; it is written
+   out rather than kept in a constant because a stylesheet cannot read one, and
+   nothing in JavaScript needs to know it any more. */
 @media (max-width: 720px) {
   .lyrics__line {
     margin-bottom: 18px;
     font-size: 22px;
+  }
+
+  /* Under the deck rather than beside it, and capped, because on a phone this
+     is the second half of the landing view rather than the whole screen: the
+     sheet gets a panel's worth of height and scrolls inside it, and the rail's
+     `#lyrics` mark is still where you go to read the lot. Without the cap the
+     mask would run the length of the document and the record — the thing you
+     came for — would spend the evening off the top. */
+  .column--aside .lyrics {
+    max-height: 48dvh;
+  }
+
+  /* The breath is what lets the first and last line reach the middle of the
+     sheet, where the bright line lives, so it is half the sheet — and the
+     sheet here is the cap above rather than the window. At 30vh it would be
+     two thirds of this panel spent on nothing. */
+  .column--aside .lyrics__breath {
+    height: 22dvh;
   }
 }
 
@@ -1253,10 +1285,16 @@ h2 {
 
 /* --- announcing one, on the console ---------------------------------------- */
 
+/* Inside the card, not flush to its rim. This form had no padding of its own at
+   all, so on the console the poster's dashed rectangle and the date field ran
+   straight into the card's rounded corners with nothing between them — the
+   worst-looking squeeze on the desk, and the one nobody notices is a missing
+   number rather than a design. */
 .schedule__form {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
+  padding: 16px var(--card-pad) var(--card-pad);
 }
 
 /* The poster is both the preview and the way to change it.
@@ -1274,9 +1312,9 @@ h2 {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
-  padding: 20px;
-  border: 1.6px dashed rgb(255 255 255 / 15%);
+  gap: 12px;
+  padding: 24px 20px;
+  border: 1.6px dashed rgb(255 255 255 / 16%);
   border-radius: 16px;
   background: rgb(23 23 23 / 40%);
   text-align: center;
@@ -1320,15 +1358,16 @@ h2 {
 .poster__badge {
   display: grid;
   place-items: center;
-  width: 48px;
-  height: 48px;
+  width: 56px;
+  height: 56px;
   border-radius: var(--pill);
   background: var(--raised);
 }
 
 .poster__hint {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
+  line-height: 18px;
   /* A filename can be anything, and one long enough to widen the card would
      take the whole console's column with it. */
   max-width: 100%;
@@ -1339,18 +1378,20 @@ h2 {
 
 .poster__spec {
   color: var(--faint);
-  font-size: 10px;
+  font-size: 11px;
+  line-height: 16.5px;
 }
 
 .schedule__field {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 
 .schedule__label {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
+  line-height: 18px;
 }
 
 /* The sentence a listener will read, checked against the field rather than
@@ -1576,6 +1617,7 @@ h2 {
   .station__main > .stale,
   .station__main > .station__columns,
   .station__main > .view,
+  .station__main > .called,
   .station__main > .outage {
     width: 100%;
     max-width: 560px;
@@ -1650,23 +1692,34 @@ h2 {
   }
 
   .rail__mark {
-    width: 40px;
-    height: 40px;
+    width: 44px;
+    height: 44px;
   }
 
   /* The rail already holds the page off its edges, so the column inside it
      lines its cards up with the rail's own sides rather than inset again. */
   .station__main {
-    gap: 16px;
+    gap: 20px;
     padding: 0;
   }
 
   .station__columns {
-    gap: 20px;
+    gap: 28px;
   }
 
   .column {
-    gap: 20px;
+    gap: 24px;
+  }
+
+  /* One number, one place. A card's inside margin comes down on a phone
+     because the card's own edge is already near the screen's, and 20px on both
+     sides of a 320px screen is a sixth of the width spent on nothing.
+
+     The console's own phone rules are not here but at the foot of the file,
+     under the console they belong to: everything below this point in the sheet
+     would otherwise put back whatever they set. See the note there. */
+  :root {
+    --card-pad: 16px;
   }
 
   /* Anchors land under the sticky rail otherwise: the rail's height plus the
@@ -1747,18 +1800,22 @@ h2 {
 .console {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 24px;
   min-width: 0;
 }
 
 /* Ruled off from the desk below it, so the title and the four controls beside
-   it read as the console's own chrome rather than as the first card. */
+   it read as the console's own chrome rather than as the first card.
+   `flex-wrap` because those four are a headcount, a broadcast switch, an
+   invite and a way out: on a laptop they fit beside the title and on anything
+   narrower they take a line of their own rather than crushing it. */
 .console__head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 24px;
-  padding-bottom: 14px;
+  gap: 16px 24px;
+  flex-wrap: wrap;
+  padding-bottom: 20px;
   border-bottom: 0.8px solid rgb(255 255 255 / 6%);
 }
 
@@ -1798,7 +1855,7 @@ h2 {
 .console__actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
   flex-wrap: wrap;
   justify-content: flex-end;
 }
@@ -1821,26 +1878,29 @@ h2 {
 .headpad__row {
   display: flex;
   align-items: center;
-  gap: 4px;
-  height: 30px;
-  padding: 0 4px;
+  gap: 6px;
+  height: var(--control);
+  padding: 0 5px;
   border-radius: var(--pill);
   background: var(--panel);
   box-shadow: var(--ring);
 }
 
+/* Round, and big enough to press without aiming. Plus and minus on a tally are
+   pressed in runs of five or six, which is precisely the gesture a 22px target
+   punishes. */
 .headpad__step {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: 26px;
+  height: 26px;
   padding: 0;
   border: 0;
   border-radius: var(--pill);
   background: var(--raised);
   color: var(--fg-dim);
-  font: 600 14px/1 var(--font);
+  font: 600 15px/1 var(--font);
   cursor: pointer;
 }
 
@@ -1901,8 +1961,8 @@ h2 {
 .invite__url {
   flex: 1;
   min-width: 0;
-  height: 30px;
-  padding: 0 12px;
+  height: var(--control);
+  padding: 0 14px;
   border: 0;
   border-radius: var(--pill);
   background: var(--panel);
@@ -1964,7 +2024,7 @@ h2 {
 .console__columns {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 20px;
+  gap: 24px;
   align-items: start;
   min-width: 0;
 }
@@ -1972,7 +2032,7 @@ h2 {
 .console__column {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 24px;
   min-width: 0;
 }
 
@@ -1988,6 +2048,14 @@ h2 {
   .console__columns {
     display: flex;
     flex-direction: column;
+    /* Undoing the grid's `align-items: start`, which means something else
+       entirely here. On the grid it keeps a short card from stretching to the
+       height of a tall one beside it; on a column flex box the cross axis is
+       the horizontal one, so it was sizing every card to the width of its own
+       longest line — which is why the Callers card, whose whole content is one
+       short sentence, came out a third of the width of the Library above it.
+       Stacked cards all take the column. */
+    align-items: stretch;
   }
 
   .console__column {
@@ -2018,9 +2086,9 @@ h2 {
  * Nothing is moved out of the order it is written in. A grid that put the third
  * column's cards visually above the second's would leave a keyboard tabbing
  * through this desk in an order nobody could see. */
-@media (min-width: 1000px) and (max-width: 1279px) {
+@media (min-width: 1000px) and (max-width: 1359px) {
   .console__columns {
-    grid-template-columns: minmax(300px, 0.8fr) minmax(0, 1.2fr);
+    grid-template-columns: minmax(340px, 0.8fr) minmax(0, 1.2fr);
   }
 
   .console__column--room {
@@ -2044,13 +2112,19 @@ h2 {
  * purpose. Where it is not supported nothing here applies and the console is
  * the ordinary three-column page it is below this width, which is a fair
  * fallback rather than a broken one.
+ *
+ * 1360 rather than the 1280 this used to start at. Three columns is only worth
+ * having if each one has room to be read, and once the cards inside them were
+ * given a card's worth of padding, 1280 divided three ways was a desk where
+ * every list was one word wide. Between 1000 and 1360 the two-column shape
+ * below is the better answer: the same cards, with room.
  */
-@media (min-width: 1280px) {
+@media (min-width: 1360px) {
   .console__columns {
     grid-template-columns:
-      minmax(300px, 0.85fr)
+      minmax(340px, 0.85fr)
       minmax(0, 1.35fr)
-      minmax(300px, 0.95fr);
+      minmax(340px, 0.95fr);
     align-items: stretch;
   }
 
@@ -2113,14 +2187,22 @@ h2 {
 .gate__input {
   flex: 1;
   min-width: 0;
-  height: 40px;
-  padding: 0 16px;
+  height: var(--control-lg);
+  padding: 0 18px;
   border: 0;
   border-radius: var(--pill);
   background: var(--panel);
   box-shadow: var(--ring);
   color: var(--fg-soft);
-  font: 400 13px/1 var(--font);
+  font: 400 14px/1 var(--font);
+}
+
+/* The pill beside a door is the point of the screen it is on, not one control
+   in a row of them, so it takes the taller of the two heights and stands level
+   with the field it belongs to. */
+.gate__form .button {
+  height: var(--control-lg);
+  padding: 0 20px;
 }
 
 .gate__input::placeholder {
@@ -2142,13 +2224,15 @@ h2 {
  * decks have.
  */
 
-/* The three moves on a queue row. Small, quiet, and never the first thing the
-   eye lands on; dragging is the gesture the design is built around. */
+/* The three moves on a queue row. Quiet, and never the first thing the eye
+   lands on; dragging is the gesture the design is built around. Not small,
+   though — these are the whole of the keyboard and touch path through a running
+   order, and at 26px they were a coin toss with a finger. */
 .icon-button {
-  width: 26px;
-  height: 26px;
+  width: 32px;
+  height: 32px;
   border: 0;
-  border-radius: 8px;
+  border-radius: 10px;
   background: transparent;
   color: var(--faint);
   font: inherit;
@@ -2175,22 +2259,29 @@ h2 {
  * A label around a real file input, so the whole strip is the target for a
  * mouse, a keyboard and a screen reader alike, and a drop lands on it too.
  *
- * A strip across the top of the library rather than the 165px block it was.
+ * A band across the top of the library rather than the 165px block it once was.
  * The block was the widest and tallest thing on the console, above everything,
  * for the rarest thing anybody does here: the desk opens on a night that is
- * already running far more often than on one being loaded in. Laid down, it is
- * still one target the full width of the column, which is what the gesture
- * needs; what it stops being is the first thing the eye lands on.
+ * already running far more often than on one being loaded in.
+ *
+ * It then went too far the other way — a 10px strip, which is a smaller target
+ * than the two words printed on it and reads as a caption rather than as
+ * somewhere to let go of a file. What it is now is the size a drop target has
+ * to be to be aimed at with a dragged file in hand: a fixed height rather than
+ * whatever two lines of text happen to come to, so the dashes stay a rectangle
+ * you can throw something into. It is still one line in the column rather than
+ * the first thing the eye lands on.
  */
 
 .dropzone {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin: 12px 16px 0;
-  padding: 10px 14px;
-  border: 1.4px dashed rgb(255 255 255 / 14%);
-  border-radius: 12px;
+  gap: 14px;
+  min-height: 76px;
+  margin: 16px var(--card-pad) 0;
+  padding: 14px 16px;
+  border: 1.4px dashed rgb(255 255 255 / 16%);
+  border-radius: 14px;
   background: rgb(255 255 255 / 2%);
   cursor: pointer;
   transition:
@@ -2214,8 +2305,8 @@ h2 {
   display: grid;
   flex: none;
   place-items: center;
-  width: 32px;
-  height: 32px;
+  width: 44px;
+  height: 44px;
   border-radius: var(--pill);
   background: var(--raised);
 }
@@ -2227,23 +2318,24 @@ h2 {
 .dropzone__say {
   display: flex;
   flex-direction: column;
+  gap: 2px;
   min-width: 0;
 }
 
 .dropzone__headline {
   color: var(--fg-soft);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
-  line-height: 19.5px;
+  line-height: 21px;
 }
 
+/* Wraps rather than truncating. It is one short sentence saying what happens to
+   what you drop, and a column narrow enough to cut it in half is a column where
+   the answer disappears exactly when it is being asked for. */
 .dropzone__detail {
   color: var(--faint);
-  font-size: 11px;
-  line-height: 16.5px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: 12px;
+  line-height: 18px;
 }
 
 /* Hidden, not absent: the input is what actually opens the picker, and what
@@ -2257,12 +2349,12 @@ h2 {
 }
 
 .uploads {
-  margin: 8px 16px 0;
+  margin: 12px var(--card-pad) 0;
   padding: 0;
   list-style: none;
   color: var(--muted);
-  font-size: 11px;
-  line-height: 16.5px;
+  font-size: 12px;
+  line-height: 18px;
 }
 
 /* --- cards -----------------------------------------------------------------
@@ -2284,8 +2376,9 @@ h2 {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 16px;
+  gap: 12px 16px;
+  flex-wrap: wrap;
+  padding: 16px var(--card-pad);
   border-bottom: 0.8px solid rgb(255 255 255 / 5%);
 }
 
@@ -2309,50 +2402,67 @@ h2 {
 }
 
 .card__blurb {
-  margin: 2px 0 0;
+  margin: 3px 0 0;
   color: var(--faint);
-  font-size: 11px;
-  line-height: 16.5px;
+  font-size: 12px;
+  line-height: 18px;
 }
 
 .card__aside {
   margin: 0;
   color: var(--faint);
-  font-size: 11px;
-  line-height: 16.5px;
+  font-size: 12px;
+  line-height: 18px;
   white-space: nowrap;
 }
 
 .card__actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   flex-wrap: wrap;
   justify-content: flex-end;
 }
 
 .card__empty {
   margin: 0;
-  padding: 16px;
+  padding: 20px var(--card-pad);
   color: var(--faint);
   font-size: 13px;
 }
 
 .card__foot {
-  padding: 8px 16px 16px;
+  padding: 4px var(--card-pad) 16px;
 }
 
+/* The quiet way to act on a row: Queue, Play now, Mark handled, Clear.
+ *
+ * It used to be bare text with no padding at all, which made every one of them
+ * an 12px-tall target sitting flush against the row's own edge — the smallest
+ * thing on the console and the one pressed most often. It is still text rather
+ * than a pill, because a library of forty rows each carrying two filled buttons
+ * is a wall; what it has now is somewhere to be pressed. */
 .card__link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  min-height: 30px;
+  padding: 0 10px;
   border: 0;
-  padding: 0;
+  border-radius: var(--pill);
   background: none;
   color: var(--muted);
   font: 500 12px/18px var(--font);
   white-space: nowrap;
   cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
 }
 
 .card__link:hover:not(:disabled) {
+  background: var(--raised);
   color: var(--fg-soft);
 }
 
@@ -2524,8 +2634,9 @@ h2 {
 .queue {
   display: flex;
   flex-direction: column;
+  gap: 2px;
   margin: 0;
-  padding: 8px;
+  padding: 12px;
   list-style: none;
 }
 
@@ -2533,7 +2644,8 @@ h2 {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 8px;
+  min-height: 52px;
+  padding: 8px 10px;
   border-radius: 14px;
   cursor: grab;
 }
@@ -2594,7 +2706,7 @@ h2 {
 .queue__moves {
   display: flex;
   flex: none;
-  gap: 2px;
+  gap: 4px;
   opacity: 0;
   transition: opacity 120ms ease;
 }
@@ -2610,16 +2722,18 @@ h2 {
 .library {
   display: flex;
   flex-direction: column;
+  gap: 2px;
   margin: 0;
-  padding: 8px;
+  padding: 12px;
   list-style: none;
 }
 
 .library__row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px;
+  gap: 8px;
+  min-height: 52px;
+  padding: 8px 10px;
   border-radius: 14px;
   font-size: 13px;
 }
@@ -2633,17 +2747,22 @@ h2 {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: baseline;
-  gap: 2px 8px;
-  padding: 8px;
+  gap: 4px 10px;
+  padding: 10px;
   border-radius: 14px;
   font-size: 13px;
 }
 
 /* Both placed rather than flowed: the mark comes after the wish in the markup,
    because that is the order it is read in, and left to find its own cell it
-   would drop to a third row of its own below the words. */
+   would drop to a third row of its own below the words. Centred in its cell
+   rather than sat on the row's baseline, and pulled back in by the difference:
+   the mark is a 30px target now, and left on the baseline it would hang below
+   the name beside it and push the wish underneath it down a line. */
 .wish-book__row .card__link {
   grid-area: 1 / 3;
+  align-self: center;
+  margin: -6px 0;
 }
 
 .wish-book__text {
@@ -2700,11 +2819,11 @@ h2 {
  */
 
 .card--mic {
-  padding-bottom: 16px;
+  padding-bottom: var(--card-pad);
 }
 
 .mic__lamp {
-  padding: 4px 10px;
+  padding: 5px 12px;
   border-radius: var(--pill);
   background: var(--raised);
   color: var(--faint);
@@ -2725,35 +2844,38 @@ h2 {
    press rather than after it. Warm rather than alarming: nothing is wrong yet. */
 .mic__warn {
   margin: 0;
-  padding: 12px 16px 0;
+  padding: 16px var(--card-pad) 0;
   color: var(--warn);
-  font-size: 11px;
-  line-height: 16.5px;
+  font-size: 12px;
+  line-height: 18px;
 }
 
 /* Louder than the headphones note above it, and deliberately: that one is
    advice, and this is the mic not working at all. */
 .mic__broken {
-  margin: 8px 16px 0;
-  padding: 8px 10px;
-  border-radius: 8px;
+  margin: 12px var(--card-pad) 0;
+  padding: 10px 12px;
+  border-radius: 10px;
   background: var(--live-wash);
   box-shadow: inset 0 0 0 1px rgb(251 44 54 / 30%);
   color: var(--live-text);
-  font-size: 11px;
-  line-height: 16.5px;
+  font-size: 12px;
+  line-height: 18px;
 }
 
 .mic__controls {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 12px 16px 0;
+  gap: 14px;
+  padding: 16px var(--card-pad) 0;
 }
 
+/* The one control on this desk reached for without looking, so it is the one
+   that gets more than the taller of the two standard heights. */
 .mic__talk {
   flex: 1;
-  height: 44px;
+  height: 52px;
+  font-size: 14px;
   font-weight: 600;
   /* No transition on the background. This button's whole job is to say whether
      the mic is open, and a colour that eases into it would be reporting the
@@ -2769,14 +2891,23 @@ h2 {
   background: var(--live-text);
 }
 
+/* A checkbox is a 13px target with a word beside it; wrapped in a label with
+   somewhere to be pressed, the word is part of the target too. Every checkbox
+   on this console gets the same treatment — see `.soundcheck__check` and
+   `.guest__cue`, which are the same object doing the same job. */
 .mic__latch {
   display: flex;
   align-items: center;
-  gap: 6px;
-  color: var(--muted);
+  gap: 8px;
+  height: var(--control);
+  padding: 0 12px 0 10px;
+  border-radius: var(--pill);
+  background: var(--raised);
+  color: var(--fg-dim);
   font-size: 12px;
   line-height: 18px;
   white-space: nowrap;
+  cursor: pointer;
 }
 
 /* The meter.
@@ -2787,8 +2918,8 @@ h2 {
  * sixty times a second. Nothing here is set from React for the same reason —
  * see `useMicInput`, which writes straight to the node. */
 .mic__meter {
-  height: 6px;
-  margin: 12px 16px 0;
+  height: 8px;
+  margin: 14px var(--card-pad) 0;
   border-radius: var(--pill);
   background: var(--raised);
   overflow: hidden;
@@ -2814,24 +2945,115 @@ h2 {
 }
 
 .mic__hint {
-  margin: 8px 0 0;
-  padding: 0 16px;
+  margin: 10px 0 0;
+  padding: 0 var(--card-pad);
   color: var(--faint);
-  font-size: 11px;
-  line-height: 16.5px;
+  font-size: 12px;
+  line-height: 18px;
 }
 
 /* Being asked up, and being up.
+ *
+ * Above every view at every width, because that is what the two states need: an
+ * invitation runs out, and an open microphone is the one thing on this page
+ * somebody must never have to go looking for. A notice tucked inside a panel
+ * behind a route is a microphone somebody forgot was open.
+ *
+ * A panel of its own rather than the outage block it used to borrow. That block
+ * is a 380px column of centred text with no padding and no ground under it,
+ * which is the right shape for a sentence explaining that nothing is on and the
+ * wrong one for a live control surface: the red wash of `--up` ran flush to the
+ * words, the meter and two buttons were laid out as if they were prose, and on
+ * a phone the whole thing sat at 380px in a column that was not. What this is
+ * instead is a card: a header line that says which of the two states it is and
+ * how long it lasts, the detail under it, the meter, and the controls in a row
+ * at the foot where the thumb already is.
+ */
+.called {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+  /* Wider than a panel and narrower than the page. The detail lines here are
+     whole sentences somebody reads once under pressure, and a sentence set
+     across a 27-inch monitor is not one of those. */
+  max-width: 680px;
+  padding: 18px 20px 20px;
+  border-radius: 20px;
+  background: var(--panel);
+  box-shadow: var(--ring-strong);
+}
 
-   An outage block rather than a panel, and above every view at every width,
-   because that is what the two states need: an invitation runs out, and an open
-   microphone is the one thing on this page somebody must never have to go
-   looking for. A notice tucked inside a panel behind a route is a microphone
-   somebody forgot was open. */
+/* Which state this is, whose turn it is, and how long it lasts, on one line.
+   The clock is the reason the line exists: what is being offered runs out, and
+   a countdown buried at the end of a paragraph is a countdown nobody reads. */
+.called__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.called__headline {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  color: var(--fg);
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 25.5px;
+}
+
+/* The same lamp the console wears, on the other end of the same call. */
+.called__lamp {
+  flex: none;
+  padding: 4px 10px;
+  border-radius: var(--pill);
+  background: var(--raised);
+  color: var(--fg-dim);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.called__lamp--live {
+  background: var(--live-wash);
+  box-shadow: inset 0 0 0 1px rgb(251 44 54 / 30%);
+  color: var(--live-text);
+}
+
+/* Tabular, so a second passing does not shuffle the headline sideways. */
+.called__left {
+  flex: none;
+  color: var(--fg-dim);
+  font-family: var(--font-numeric);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.called__left--gone {
+  color: var(--warn);
+}
+
+.called__detail {
+  margin: 0;
+  color: var(--fg-dim);
+  font-size: 13px;
+  line-height: 19.5px;
+}
+
 .called__actions {
   display: flex;
-  gap: 8px;
-  margin-top: 10px;
+  gap: 10px;
+}
+
+/* Both of these are the point of the panel they are in, so they take the
+   larger of the two control heights and share the width between them. */
+.called__actions .button {
+  flex: 1;
+  height: var(--control-lg);
 }
 
 /* Louder than the invitation above it, and deliberately so: one of these is an
@@ -2852,7 +3074,7 @@ h2 {
    other way to find out is to hear yourself, which is the thing causing the
    feedback this whole panel exists to prevent. */
 .called__hint {
-  margin: 10px 0 0;
+  margin: 0;
   color: var(--fg-dim);
   font-size: 13px;
   line-height: 19.5px;
@@ -2860,7 +3082,6 @@ h2 {
 
 .called__meter {
   height: 10px;
-  margin-top: 10px;
   border-radius: var(--pill);
   background: var(--raised);
   overflow: hidden;
@@ -2894,34 +3115,38 @@ h2 {
    a wish, and a queue the room could see would be a social cost paid by the
    shyest person in it. */
 .card--floor {
-  padding-bottom: 16px;
+  padding-bottom: var(--card-pad);
 }
 
 .floor__hands {
-  margin: 8px 0 0;
+  margin: 12px 0 0;
   padding: 0;
   list-style: none;
   /* Long enough to read at a glance, capped so a room full of raised hands
      does not push the rest of the column off the screen. Same reasoning, and
      the same number, as the reach list below. */
-  max-height: 160px;
+  max-height: 220px;
   overflow-y: auto;
 }
 
+/* A name and the button that answers it. The row is as tall as the button
+   because the button is what the row is for: these are pressed while a record
+   is ending, which is the worst possible moment to be aiming at a 16px line. */
 .floor__hand,
 .floor__up {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 4px 16px;
-  font-size: 11px;
-  line-height: 16.5px;
+  gap: 12px;
+  min-height: 48px;
+  padding: 4px var(--card-pad);
+  font-size: 13px;
+  line-height: 19.5px;
 }
 
 /* Whoever is up sits a little away from the list it came out of: this is a
    state rather than a queue, and it should not read as the first row of one. */
 .floor__up {
-  padding-top: 10px;
+  margin-top: 12px;
 }
 
 .floor__who {
@@ -2939,18 +3164,21 @@ h2 {
    list: two connections, two failures, two fixes, and a console that reported
    one number would send somebody looking at the wrong end of a call. */
 .guest {
-  margin: 12px 16px 0;
-  padding: 8px 10px;
-  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 16px var(--card-pad) 0;
+  padding: 14px;
+  border-radius: 14px;
   background: var(--raised);
 }
 
 .guest__row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 11px;
-  line-height: 16.5px;
+  gap: 10px;
+  font-size: 12px;
+  line-height: 18px;
 }
 
 .guest__who {
@@ -2966,47 +3194,57 @@ h2 {
   color: var(--faint);
 }
 
+/* The same pressable label the latch wears, one card down. */
 .guest__cue {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin-top: 6px;
-  color: var(--faint);
-  font-size: 11px;
-  line-height: 16.5px;
+  gap: 8px;
+  align-self: flex-start;
+  height: calc(var(--control) - 4px);
+  padding: 0 12px 0 10px;
+  border-radius: var(--pill);
+  background: rgb(255 255 255 / 5%);
+  color: var(--fg-dim);
+  font-size: 12px;
+  line-height: 18px;
+  cursor: pointer;
 }
 
 /* Riding the caller's level. A caller on a phone in a corridor and one on a
    decent headset are not the same volume, and the difference is something you
    hear rather than something you set beforehand. */
 .guest__fader {
-  display: block;
-  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .guest__fader-label {
   display: flex;
   justify-content: space-between;
-  color: var(--faint);
-  font-size: 11px;
-  line-height: 16.5px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 18px;
 }
 
 .guest__fader-label em {
+  color: var(--fg-dim);
   font-style: normal;
   font-variant-numeric: tabular-nums;
 }
 
 .guest__fader input {
   width: 100%;
+  accent-color: var(--fg);
 }
 
 /* Sharp, and beside a polite one so the sharp one stays sharp. This is as much
    of a dump button as a station whose music is aligned to a clock can have:
-   there is no delay to drop, so all it has is speed. */
+   there is no delay to drop, so all it has is speed — which is also why it is
+   the full width of its card and the taller of the two heights. */
 .guest__cut {
   width: 100%;
-  margin-top: 8px;
+  height: var(--control-lg);
 }
 
 /* Who can actually hear the mic.
@@ -3015,40 +3253,40 @@ h2 {
  * shouted it would be shouting all evening. The colour is on the dots alone,
  * so the eye finds a problem without the list ever becoming loud. */
 .reach {
-  margin-top: 10px;
-  padding: 0 16px;
+  margin-top: 16px;
+  padding: 0 var(--card-pad);
 }
 
 .reach__none,
 .reach__summary {
   margin: 0;
   color: var(--muted);
-  font-size: 11px;
-  line-height: 16.5px;
+  font-size: 12px;
+  line-height: 18px;
   font-variant-numeric: tabular-nums;
 }
 
 .reach__none {
-  padding: 6px 16px 0;
+  padding: 12px var(--card-pad) 0;
 }
 
 .reach__list {
-  margin: 6px 0 0;
+  margin: 8px 0 0;
   padding: 0;
   list-style: none;
   /* Long enough to read a room at a glance, capped so a full house does not
      push the queue off the screen. */
-  max-height: 160px;
+  max-height: 180px;
   overflow-y: auto;
 }
 
 .reach__row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 3px 0;
-  font-size: 11px;
-  line-height: 16.5px;
+  gap: 10px;
+  padding: 5px 0;
+  font-size: 12px;
+  line-height: 18px;
 }
 
 .reach__who {
@@ -3093,8 +3331,8 @@ h2 {
 .mic__duck {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 16px 16px 0;
+  gap: 10px;
+  padding: 20px var(--card-pad) 0;
 }
 
 .mic__duck-label {
@@ -3124,8 +3362,8 @@ h2 {
    and a pair of headphones and nothing else. Ruled off from the controls above
    because those drive the broadcast and these only describe this machine. */
 .soundcheck {
-  margin-top: 16px;
-  padding: 12px 16px 0;
+  margin-top: 20px;
+  padding: 18px var(--card-pad) 0;
   border-top: 0.8px solid rgb(255 255 255 / 5%);
 }
 
@@ -3138,30 +3376,30 @@ h2 {
 
 .soundcheck__title {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
-  line-height: 18px;
+  line-height: 19.5px;
 }
 
 .soundcheck__power {
-  height: 28px;
-  padding: 0 10px;
-  font-size: 11px;
+  height: calc(var(--control) - 4px);
+  padding: 0 14px;
+  font-size: 12px;
 }
 
 .soundcheck__error {
-  margin: 8px 0 0;
+  margin: 12px 0 0;
   color: var(--warn);
-  font-size: 11px;
-  line-height: 16.5px;
+  font-size: 12px;
+  line-height: 18px;
 }
 
 .soundcheck__row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  margin-top: 10px;
+  gap: 14px;
+  margin-top: 16px;
   color: var(--muted);
   font-size: 12px;
   line-height: 18px;
@@ -3170,24 +3408,35 @@ h2 {
 .soundcheck__row select {
   flex: 1;
   min-width: 0;
-  height: 28px;
-  padding: 0 6px;
+  height: var(--control);
+  padding: 0 10px;
   border: none;
-  border-radius: 8px;
+  border-radius: 10px;
   background: var(--raised);
   box-shadow: var(--ring);
   color: var(--fg-dim);
   font: inherit;
+  cursor: pointer;
 }
 
+/* Pressable, like the latch above it: the word is part of the target rather
+   than a caption beside a 13px box. Laid out as a row so a trailing note about
+   why the box is greyed out sits on the same line as the box it explains. */
 .soundcheck__check {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin-top: 8px;
-  color: var(--muted);
+  gap: 8px;
+  align-self: flex-start;
+  width: fit-content;
+  min-height: calc(var(--control) - 4px);
+  margin-top: 10px;
+  padding: 0 12px 0 10px;
+  border-radius: var(--pill);
+  background: rgb(255 255 255 / 4%);
+  color: var(--fg-dim);
   font-size: 12px;
   line-height: 18px;
+  cursor: pointer;
 }
 
 /* Why a box is greyed out, beside the box rather than in a note underneath it:
@@ -3198,10 +3447,10 @@ h2 {
 }
 
 .soundcheck__note {
-  margin: 10px 0 0;
+  margin: 14px 0 0;
   color: var(--faint);
-  font-size: 11px;
-  line-height: 16.5px;
+  font-size: 12px;
+  line-height: 18px;
 }
 
 /* --- the room, from the other side -----------------------------------------
@@ -3222,9 +3471,9 @@ h2 {
 .comments {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
   margin: 0;
-  padding: 16px;
+  padding: var(--card-pad);
   overflow-y: auto;
   overscroll-behavior: contain;
   list-style: none;
@@ -3260,7 +3509,7 @@ h2 {
   flex-direction: column;
   flex: 1;
   min-width: 0;
-  padding: 8px 12px;
+  padding: 10px 14px;
   /* Squared off at the corner nearest the avatar, so the bubble reads as
      coming from it. */
   border-radius: 6px 16px 16px;
@@ -3276,8 +3525,8 @@ h2 {
 
 .comments__nick {
   color: var(--muted);
-  font-size: 10px;
-  line-height: 15px;
+  font-size: 11px;
+  line-height: 16.5px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3287,7 +3536,7 @@ h2 {
   flex: none;
   color: var(--faint);
   font-family: var(--font-numeric);
-  font-size: 10px;
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -3300,13 +3549,17 @@ h2 {
  * exist for a mouse and for nobody else. Already-muted stays visible whatever
  * the pointer is doing, because that one is a state and not an offer. */
 .comments__mute {
+  display: inline-flex;
+  align-items: center;
   flex: none;
-  padding: 0 6px;
+  height: 24px;
+  margin: -3px 0;
+  padding: 0 10px;
   border: 0;
   border-radius: var(--pill);
   background: transparent;
   color: var(--faint);
-  font: 600 10px/15px var(--font);
+  font: 600 11px/16.5px var(--font);
   cursor: pointer;
   opacity: 0;
   transition: opacity 120ms ease;
@@ -3358,7 +3611,7 @@ h2 {
  * reach for: the library, not the transport; the conversation, not the wishes.
  */
 
-@media (min-width: 1280px) {
+@media (min-width: 1360px) {
   /* Nothing above the list may be scrolled away: the heading is what says which
      of these lists you are looking at, and the transport is the reason the
      queue card is at the top of its column at all. */
@@ -3404,6 +3657,70 @@ h2 {
   }
 }
 
+/* --- the console, on a phone -------------------------------------------------
+ *
+ * Down here rather than up with the listener page's phone rules, and that is
+ * not filing: the console's own section sits below those in this sheet, so
+ * anything set up there about `.console__head` or `.console__actions` is put
+ * straight back by the base rules that come after it. Same trap the touch block
+ * below is written to avoid, from the other direction.
+ */
+
+@media (max-width: 720px) {
+  /* A title, and then the four controls, rather than the four controls crushed
+     into whatever the title leaves of a 390px line. */
+  .console__head {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 18px;
+  }
+
+  /* Left, with the title above them, instead of drifting to the right-hand
+     edge where they were a ragged column of odd lengths. */
+  .console__actions {
+    justify-content: flex-start;
+  }
+
+  .console__columns,
+  .console__column {
+    gap: 20px;
+  }
+
+  /* Two lines, not four words a line. The card's actions sit under its heading
+     on a phone, which is the only way three transport buttons fit at a size
+     worth pressing. */
+  .card__actions {
+    justify-content: flex-start;
+  }
+
+  .card__actions .button {
+    flex: 1;
+  }
+
+  /* The drop zone stacks: at 390px a 44px badge, a headline and a sentence
+     side by side leave the sentence two words wide. */
+  .dropzone {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 16px;
+  }
+
+  /* The grip goes. HTML5 drag and drop does not happen on a touch screen at
+     all, so on a phone it is a handle for a gesture that cannot be made — and
+     28px of a 390px row is the difference between a track's title fitting and
+     being cut to three words. The three move buttons beside it are the whole
+     of the reordering here, which is why they are the ones that stay. */
+  .queue__grip {
+    display: none;
+  }
+
+  .queue__row,
+  .library__row {
+    gap: 8px;
+  }
+}
+
 /* --- touch -------------------------------------------------------------------
  *
  * Not "narrow", but a phone held in a hand, which a wide tablet also is and a
@@ -3416,6 +3733,14 @@ h2 {
  */
 
 @media (pointer: coarse) {
+  /* The whole set at once. `--control` is what every pill, chip and field on
+     both sides of the station is sized from, so lifting it here is the one
+     edit that gives a thumb somewhere to land on all of them — rather than
+     forty rules each remembering separately that a phone exists. */
+  :root {
+    --control: var(--control-lg);
+  }
+
   /* 16px is the threshold under which Safari zooms the page in on a focused
      field, and it does not zoom back out afterwards. Typing a nickname, a
      line of chat or a door code would leave the station scaled up and scrolled
@@ -3423,23 +3748,72 @@ h2 {
   .compose__input,
   .join__input,
   .gate__input,
-  .invite__url {
+  .invite__url,
+  .soundcheck__row select {
     font-size: 16px;
   }
 
-  /* The invite field is drawn at a console's density; at 16px it needs the
-     height to match, or the text sits against its own rim. */
+  /* Controls drawn at a console's density, given the same height as the rest
+     once their type has grown to meet the rule above. */
+  .compose__input,
+  .compose__send,
   .invite__url {
-    height: 36px;
+    height: var(--control-lg);
   }
 
-  /* Controls sized for a cursor, given a thumb's worth of height. */
-  .compose__send {
+  /* The moves on a queue row, and the mark on a wish: both are a target beside
+     a line of type, and neither has a hover to grow into on a touch screen.
+     40 rather than the full 44, because there are three of them in a row and
+     the row also has a track's name to fit. */
+  .icon-button {
+    width: 40px;
     height: 40px;
+  }
+
+  .card__link {
+    min-height: var(--control-lg);
+    padding: 0 14px;
+  }
+
+  .headpad__step {
+    width: 34px;
+    height: 34px;
+  }
+
+  /* Already always visible on a touch screen (see the `hover: none` block
+     above); this is the half that makes it worth aiming at. */
+  .comments__mute {
+    height: 30px;
+    margin: -6px 0;
   }
 
   /* A bare line of text otherwise, and about 18px of it to hit. */
   .panel__more {
     padding: 6px 0;
+  }
+
+  /* Range inputs draw a thumb sized for a cursor whatever else is done to
+     them. These three are all held and dragged — the scrub, the duck, the
+     caller's level — so the thumb is given something to be. */
+  .scrub__bar::-webkit-slider-thumb,
+  .mic__duck input::-webkit-slider-thumb,
+  .guest__fader input::-webkit-slider-thumb {
+    width: 20px;
+    height: 20px;
+  }
+
+  .scrub__bar::-webkit-slider-thumb {
+    margin-top: -8px;
+  }
+
+  .scrub__bar::-moz-range-thumb,
+  .mic__duck input::-moz-range-thumb,
+  .guest__fader input::-moz-range-thumb {
+    width: 20px;
+    height: 20px;
+  }
+
+  .scrub__bar {
+    height: 32px;
   }
 }

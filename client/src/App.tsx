@@ -17,7 +17,6 @@ import { Topbar } from './Topbar.js'
 import { deafened, handRefusal } from './lib/hand.js'
 import { Deck, Mute, OnAir, Waveform } from './Turntable.js'
 import { type AdminSession, useAdminSession } from './hooks/useAdminSession.js'
-import { useNarrow } from './hooks/useNarrow.js'
 import { type Access, useStationAccess } from './hooks/useStationAccess.js'
 import { useMediaSession } from './hooks/useMediaSession.js'
 import { usePresence } from './hooks/usePresence.js'
@@ -219,8 +218,10 @@ function Doorway({
 
 function Station({ route: requested, session }: { route: Route; session: AdminSession }) {
   const audioRef = useRef<HTMLAudioElement>(null)
-  // A phone, where the landing view is the deck alone. See useNarrow.
-  const narrow = useNarrow()
+  // Nothing here asks how wide the window is any more. The landing view is the
+  // record and the words to it at every width, and whether those sit side by
+  // side or stacked is a question the stylesheet answers on its own — which is
+  // one fewer place for the two of them to disagree about what a phone is.
   const [joined, setJoined] = useState(false)
   // Read once, at mount: what a previous visit left behind is the starting
   // point for the field, not a decision to join. The gesture still has to
@@ -807,38 +808,38 @@ function Station({ route: requested, session }: { route: Route; session: AdminSe
                 </div>
               )}
 
-              {/* No wishes here, and no clock, at any width.
+              {/* Nothing else under the deck, at any width.
 
-                  Both have a mark on the rail and a screen of their own, and
-                  both are things you go to rather than things the deck should
-                  be carrying. Asking for something wants the composer at full
-                  width with what you have already asked for listed under it,
-                  not a footnote below the record. The clock numbers want the
+                  Every panel that used to stack here — the wishes, the clock,
+                  the roster, the raised hand — has a mark on the rail and a
+                  screen of its own, and every one of them is something you go
+                  to rather than something the record should be carrying.
+                  Asking for something wants the composer at full width with
+                  what you have already asked for listed under it, not a
+                  footnote below the sleeve. The clock numbers want the
                   glossary beside them that says what each one means, which is
-                  the only time anybody reads them. A strip of four figures
-                  under the mute button is a readout you glance at, worry
-                  about, and cannot act on. Both are at `#wishes` and `#sync`.
+                  the only time anybody reads them. The roster and the hand
+                  belong to the room, and the room is at `#chat`.
 
-                  Who else is here stays: that is not somewhere you go, it is
-                  something about the room you are already in. */}
-              {!narrow && <Listeners listeners={listeners} padding={padding} />}
-              {/* On the desk, under the room. Asking to speak is about the room
-                  you are in rather than about the record, which is why it sits
-                  here and not beside the deck. */}
-              {!narrow && hand}
+                  What is left is the two things this view is for: the record,
+                  and the words to it. */}
             </section>
 
-            {!narrow && (
-              <section className="column column--aside">
-                {/* The whole column, and nothing else on it. The queue, the
-                    evening and the room used to stack here; they all still
-                    exist, one rail mark away, where each gets a full screen
-                    instead of a third of a column. What sits beside the deck
-                    now is the one thing that belongs to *this* moment of the
-                    song and no other: the words. */}
-                <Lyrics state={state} serverNow={clock.serverNow} />
-              </section>
-            )}
+            <section className="column column--aside">
+              {/* The whole column, and nothing else on it. The queue, the
+                  evening and the room used to stack here; they all still
+                  exist, one rail mark away, where each gets a full screen
+                  instead of a third of a column. What sits beside the deck now
+                  is the one thing that belongs to *this* moment of the song
+                  and no other: the words.
+
+                  On a phone the column falls under the deck rather than away
+                  to `#lyrics`, and is capped there so it is a panel you can
+                  read from rather than a second page grafted onto the first.
+                  The rail's own mark is still where you go to read the whole
+                  sheet. */}
+              <Lyrics state={state} serverNow={clock.serverNow} />
+            </section>
           </div>
         ) : (
           // One thing, with the whole screen. Nothing here is new data; it is

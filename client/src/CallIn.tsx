@@ -140,9 +140,13 @@ export function CallIn({
 
   if (speaking) {
     return (
-      <div className="outage called called--up" data-testid="on-the-mic" role="status">
-        <p className="outage__headline">You're on the mic.</p>
-        <p className="outage__detail" data-testid="on-the-mic-detail">
+      <div className="called called--up" data-testid="on-the-mic" role="status">
+        <div className="called__head">
+          <span className="called__lamp called__lamp--live">on the mic</span>
+          <p className="called__headline">You're on the mic.</p>
+        </div>
+
+        <p className="called__detail" data-testid="on-the-mic-detail">
           {reaching(talking)}
         </p>
 
@@ -177,9 +181,12 @@ export function CallIn({
   // rather than an explanation of the turn they are being given another go at.
   if (ended && !invited) {
     return (
-      <div className="outage called" data-testid="turn-over" role="status">
-        <p className="outage__headline">You're off the mic.</p>
-        <p className="outage__detail">
+      <div className="called" data-testid="turn-over" role="status">
+        <div className="called__head">
+          <span className="called__lamp">off the mic</span>
+          <p className="called__headline">You're off the mic.</p>
+        </div>
+        <p className="called__detail">
           The music is back. Put your hand up again if there is more to say.
         </p>
       </div>
@@ -191,13 +198,19 @@ export function CallIn({
   const status = guest.input.status
 
   return (
-    <div className="outage called" data-testid="called-up" role="status">
-      <p className="outage__headline">The decks have asked you up.</p>
-      <p className="outage__detail">
-        {left > 0
-          ? `The offer is open for another ${left} second${left === 1 ? '' : 's'}.`
-          : 'The offer has run out.'}
-      </p>
+    <div className="called" data-testid="called-up" role="status">
+      {/* The headline and the clock on one line, and the clock is the reason
+          this row exists: what is being offered runs out, and a countdown
+          buried at the end of a sentence is a countdown nobody reads. It is
+          tabular so the digits do not shuffle the headline sideways once a
+          second. */}
+      <div className="called__head">
+        <span className="called__lamp">asked up</span>
+        <p className="called__headline">The decks have asked you up.</p>
+        <span className={`called__left${left === 0 ? ' called__left--gone' : ''}`}>
+          {left > 0 ? `${left}s left` : 'run out'}
+        </span>
+      </div>
 
       {status === 'idle' ? (
         // Headphones first, and before the microphone is asked for rather than
