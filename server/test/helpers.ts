@@ -10,6 +10,9 @@ import type { ChatLog } from '../src/chat.js'
 import type { Config } from '../src/config.js'
 import type { OnAir } from '../src/air.js'
 import type { Schedule } from '../src/schedule.js'
+import type { CoHost } from '../src/cohost.js'
+import type { Floor } from '../src/floor.js'
+import type { Mic } from '../src/mic.js'
 import type { Mutes } from '../src/mutes.js'
 import type { Padding } from '../src/padding.js'
 import { type Db, openDb } from '../src/db.js'
@@ -22,6 +25,7 @@ import type { WishBook } from '../src/wishes.js'
 
 export const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures')
 export const ADMIN_PASSWORD = 'hunter2-for-tests'
+export const CO_HOST_KEY = 'seat-key-for-tests'
 
 export interface Harness {
   app: FastifyInstance
@@ -35,6 +39,9 @@ export interface Harness {
   air: OnAir
   schedule: Schedule
   mutes: Mutes
+  mic: Mic
+  floor: Floor
+  coHost: CoHost
   padding: Padding
   lyrics: LyricsService
   /** Only set when the harness was started with `listen: true`. */
@@ -62,14 +69,45 @@ export interface HarnessOptions {
   joinRefillMs?: number
   wishBurst?: number
   wishRefillMs?: number
+  /** Signalling frames a listener may send back to back. The decks are exempt. */
+  signalBurst?: number
+  signalRefillMs?: number
   signInBurst?: number
   signInRefillMs?: number
+  /** How long an open mic lasts without a renew. See `Mic`. */
+  micLeaseMs?: number
+  /** How long an invitation to the mic stands. See `Floor`. */
+  inviteTtlMs?: number
+  /** How long a co-host seat lasts without a renew. See `CoHost`. */
+  seatLeaseMs?: number
+  /**
+   * How long two records overlap.
+   *
+   * Zero by default, which is *not* what production does — a station comes up
+   * blending at three seconds. Every test here that is about advancement is
+   * about when the station moves rather than about how it sounds doing it, and
+   * a default that started the next record early would have all of them
+   * asserting against the crossfade by accident. The tests that are about
+   * transitions set it, loudly. See `Transition`.
+   */
+  blendMs?: number
+  /** Hand frames a socket may send back to back. */
+  handBurst?: number
+  handRefillMs?: number
+  /**
+   * How often a lapsed mic is swept up. The tests that are about expiry call
+   * `mic.sweep()` by hand against a clock they drive, so this is only here for
+   * anything that wants the real interval out of the way.
+   */
+  micSweepIntervalMs?: number
   /**
    * Stands in for LRCLIB. Defaults to an archive that knows nothing, so no
    * test reaches the real internet by accident; the lyrics tests hand in one
    * that answers.
    */
   lyricsFetch?: typeof fetch
+  /** Stands in for Cloudflare's relay; nothing here reaches the real one. */
+  turnFetch?: typeof fetch
   /** Bind a real port: required for anything that opens a websocket. */
   listen?: boolean
 }
@@ -89,9 +127,19 @@ export async function startHarness(
     joinRefillMs,
     wishBurst,
     wishRefillMs,
+    signalBurst,
+    signalRefillMs,
     signInBurst,
     signInRefillMs,
+    micLeaseMs,
+    inviteTtlMs,
+    seatLeaseMs,
+    blendMs = 0,
+    handBurst,
+    handRefillMs,
+    micSweepIntervalMs,
     lyricsFetch = async () => new Response(null, { status: 404 }),
+    turnFetch = async () => new Response(null, { status: 404 }),
     listen = false,
   }: HarnessOptions = {},
 ): Promise<Harness> {
@@ -109,9 +157,21 @@ export async function startHarness(
     // Open by default, which is what an unset STATION_KEY means and what most
     // tests want. The ones about the gate pass a key through `overrides`.
     stationKey: null,
+    // Spelled out rather than derived, so a test that wants to present one has
+    // a literal to present and does not have to recompute an HMAC to do it.
+    coHostKey: CO_HOST_KEY,
     maxUploadBytes: 10 * 1024 * 1024,
     // Never resolved: the harness stubs the fetch itself. See `lyricsFetch`.
     lrclibBaseUrl: 'http://lrclib.invalid',
+    // Never read: the harness passes `logger: false`. Present so the shape is
+    // the shape production has.
+    logLevel: 'silent',
+    // No STUN and no relay, so nothing here reaches the internet to find out
+    // how two browsers would meet. The tests that are about `/api/rtc` pass
+    // their own through `overrides`.
+    stunUrls: [],
+    turn: null,
+    cloudflareTurn: null,
     // No client bundle: these tests are about the API. The doorway tests build
     // a bundle in a temp dir and pass it through `overrides`.
     clientDir: null,
@@ -138,9 +198,19 @@ export async function startHarness(
     joinRefillMs,
     wishBurst,
     wishRefillMs,
+    signalBurst,
+    signalRefillMs,
     signInBurst,
     signInRefillMs,
+    micLeaseMs,
+    inviteTtlMs,
+    seatLeaseMs,
+    blendMs,
+    handBurst,
+    handRefillMs,
+    micSweepIntervalMs,
     lyricsFetch,
+    turnFetch,
   })
 
   let wsUrl = ''
@@ -162,6 +232,9 @@ export async function startHarness(
     air: app.air,
     schedule: app.schedule,
     mutes: app.mutes,
+    mic: app.mic,
+    floor: app.floor,
+    coHost: app.coHost,
     padding: app.padding,
     lyrics: app.lyrics,
     wsUrl,
@@ -189,6 +262,24 @@ export async function signIn(harness: Harness, password = ADMIN_PASSWORD): Promi
 }
 
 /** The signed token out of a `Set-Cookie`, for asserting on it directly. */
+/**
+ * Redeem the co-host key the way the phone does, and hand back the `Cookie`
+ * header it would send from then on: `chunky_cohost=<token>`.
+ *
+ * Deliberately not `signIn` with a different argument. The two are different
+ * doors to different rungs, and a helper that blurred them would make it easy
+ * to write a test that proves the seat can do something when what it actually
+ * proved was that an admin cookie can.
+ */
+export async function takeKey(harness: Harness, key = CO_HOST_KEY): Promise<string> {
+  const res = await harness.app.inject({
+    method: 'POST',
+    url: '/api/cohost/session',
+    payload: { key },
+  })
+  return `chunky_cohost=${tokenFrom(res)}`
+}
+
 export function tokenFrom(res: { headers: Record<string, unknown> }): string {
   return String(res.headers['set-cookie']).split(';')[0]!.split('=').slice(1).join('=')
 }

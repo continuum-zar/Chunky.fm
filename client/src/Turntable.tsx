@@ -139,19 +139,44 @@ export interface OnAirProps {
   live: boolean
   /** What the badge says instead of LIVE when the station isn't playing. */
   idleLabel: string
+  /**
+   * Whether somebody is talking over the music right now.
+   *
+   * Worth saying out loud rather than leaving the listener to infer it from the
+   * music having gone quiet, which is the other thing a duck could be: a track
+   * that was mastered low, a page that broke, a connection thinning out. The
+   * badge is where it goes because the badge is already the answer to "what is
+   * this sound", and during a break the answer changes.
+   */
+  talking?: boolean
+  /**
+   * Whose voice it is, when it is not the decks'.
+   *
+   * The badge already answers "what is this sound", and during a call-in the
+   * honest answer has a name in it. Null the rest of the time, including while
+   * whoever runs the decks is talking: they are the station, and naming them
+   * would be the station introducing itself every time it opened its mouth.
+   */
+  speaker?: string | null
 }
 
 /** The LIVE badge and the line beside it. */
-export function OnAir({ live, idleLabel }: OnAirProps) {
+export function OnAir({ live, idleLabel, talking = false, speaker = null }: OnAirProps) {
   return (
     <div className="onair">
       <span className={`onair__badge${live ? '' : ' onair__badge--off'}`}>
         <span className="onair__dot" aria-hidden="true" />
         {live ? 'LIVE' : idleLabel}
       </span>
-      <span className="onair__where">
+      {/* `status`, so a listener who cannot see the badge is told a break has
+          started rather than sitting through unexplained quiet music. */}
+      <span
+        className={`onair__where${talking ? ' onair__where--mic' : ''}`}
+        data-testid="on-mic"
+        role="status"
+      >
         <img src={onAirIcon} alt="" width={14} height={14} />
-        {live ? 'On air now' : 'Off air'}
+        {talking ? (speaker ? `${speaker} is on the mic` : 'On the mic') : live ? 'On air now' : 'Off air'}
       </span>
     </div>
   )

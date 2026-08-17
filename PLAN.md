@@ -171,4 +171,8 @@ first and alone.
 - Auto-DJ when the queue empties.
 - Multiple rooms.
 - Listener uploads.
-- Mic / talk-over-the-music DJ mode.
+- ~~Mic / talk-over-the-music DJ mode.~~ **Built.** The station ducks on
+  command, and the voice travels peer-to-peer without touching the server, so
+  it still costs nothing to run. See `docs/broadcasting.md` for why the ducking
+  was built first and separately from the voice, and
+  `docs/broadcasting-build.md` for what each milestone actually cost.

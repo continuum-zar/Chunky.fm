@@ -1,10 +1,73 @@
 import type { AirSnapshot } from './air.js'
 import { type ChatMessage, MESSAGE_MAX_LENGTH, normalizeMessageText } from './chat.js'
+import type { CoHostSnapshot } from './cohost.js'
+import type { FloorSnapshot } from './floor.js'
 import type { Play } from './history.js'
+import type { MicSnapshot } from './mic.js'
 import type { PlaybackSnapshot } from './playback.js'
 import { type Listener, normalizeNickname } from './presence.js'
 import type { QueueEntry } from './queue.js'
+import type { ScheduledSession } from './schedule.js'
+import type { TransitionSnapshot } from './transition.js'
 import { type Wish, WISH_MAX_LENGTH, normalizeWishText } from './wishes.js'
+
+/**
+ * Who this socket is, as far as the station is concerned. The first frame of
+ * all, and the only one addressed to one socket about itself.
+ *
+ * The id is the same one the roster carries, and it exists on every socket
+ * whether or not anybody has named themselves. Until the mic learned to send a
+ * voice, nothing needed it: a listener is told who *else* is here and never has
+ * to place itself among them. Signalling does, twice over. The decks address an
+ * offer to a listener by id, so they need to know which id not to offer to —
+ * whoever runs the station is usually tuned in as well, and a console that
+ * called itself would spend the evening negotiating with its own microphone.
+ * And a listener answers whoever offered, which means reading an id off a frame
+ * and trusting it is not its own.
+ */
+export interface YouMessage {
+  type: 'you'
+  id: number
+  /**
+   * Whether the station considers this socket the decks.
+   *
+   * Here because a socket cannot change its mind about who it is, and a browser
+   * has no way to know what it presented on an upgrade it did not write. The
+   * console opens its socket when the page loads, which is *before* anybody has
+   * signed in, so a sign-in that happens afterwards leaves a connection that
+   * carries no admin cookie and never will. Everything else about the console
+   * keeps working — commands go over HTTP, which does carry it — and the only
+   * symptom is that no listener can be offered a voice, silently.
+   *
+   * So the station says so, and the client reconnects to get a socket that
+   * carries what it now has. Without this the page has to guess, and guessing
+   * means either reconnecting every time it signs in or never noticing.
+   */
+  decks: boolean
+}
+
+/**
+ * One end of a WebRTC negotiation talking to the other, relayed.
+ *
+ * The station does not read these. `payload` is an offer, an answer or an ICE
+ * candidate, and it is carried from one socket to another without being
+ * understood — the same way the station carries no audio. What the server does
+ * own is *who may say what to whom*, which is the whole of the gate:
+ *
+ * - The decks may address any socket. That is what fanning a voice out is.
+ * - A listener may address the decks and nobody else. Two listeners have no
+ *   business negotiating with each other, and a socket that could reach any
+ *   other by id would be a way to make the station introduce strangers.
+ *
+ * `from` on the way out is stamped by the server, never carried by the sender,
+ * for the reason a chat message's author is: a frame that named its own origin
+ * would let a listener pose as the decks and offer somebody a microphone.
+ */
+export interface SignalMessage {
+  type: 'signal'
+  from: number
+  payload: unknown
+}
 
 /** Full playback state. Sent on connect and on every change. */
 export type StateMessage = PlaybackSnapshot & { type: 'state' }
@@ -37,10 +100,103 @@ export type AirMessage = AirSnapshot & { type: 'air' }
  * under `/api/poster/`, or null for a time with no picture behind it. Unlike
  * everything else on this socket the same thing is readable over HTTP without a
  * key: see `scheduleRoutes`.
+ *
+ * It carries the announcement whole rather than a hand-written subset of it, so
+ * a field added to `ScheduledSession` reaches the off-air screen and the page in
+ * front of the station by the same route and at the same time. The two used to
+ * be spelled out separately here and the socket quietly said less than the HTTP
+ * read did, which is exactly the kind of drift nothing fails on.
  */
 export interface ScheduleMessage {
   type: 'schedule'
-  schedule: { startsAt: number; poster: string | null } | null
+  schedule: ScheduledSession | null
+}
+
+/**
+ * Whether somebody is talking over the music, and how far it drops while they
+ * are. Sent on connect and on every change.
+ *
+ * Kept out of `state` for the reason the queue is, and then some: playback
+ * changes several times a track, and a mic break changes twice a sentence, so
+ * folding them together would ship a playback snapshot every time whoever runs
+ * the decks drew breath.
+ *
+ * It is on the wire at all because the ducking is not a mix. Nothing about the
+ * music passes through this server, so there is no fader here to move; what
+ * there is instead is this frame, and thirty browsers turning down the copy
+ * they are each already playing at the same instant. A listener who arrives
+ * mid-break is handed it in the connect burst, before `state`, so they come in
+ * already ducked rather than putting half a second of full-volume music under
+ * somebody's voice.
+ */
+export type MicMessage = MicSnapshot & { type: 'mic' }
+
+/**
+ * Who, besides the decks, is allowed to talk. Sent on connect and on every
+ * change.
+ *
+ * The mic frame beside this one says whether the music should sit down and how
+ * far; this says whose voice it is sitting down for. Kept apart for the reason
+ * the mic is kept out of `state`: they change on entirely different schedules —
+ * the mic twice a sentence, the floor twice an evening — and folding them
+ * together would ship the whole call state every time somebody drew breath.
+ *
+ * `invited` is broadcast rather than addressed to the one socket it concerns.
+ * The guest reads their own id off it, which spares the station a frame that
+ * exists to be sent to one person, and a room that can see somebody being
+ * brought up reads the pause before a voice for what it is. The private half of
+ * this feature is `hands`, which is a different frame with a different audience.
+ */
+export type FloorMessage = FloorSnapshot & { type: 'floor' }
+
+/**
+ * Who is co-hosting. Sent on connect and on every change.
+ *
+ * The third of the frames about voices, and it is not either of the other two.
+ * `floor` is a listener the decks brought up, which is a favour granted and
+ * revocable. This is somebody who arrived holding a key: they seated
+ * themselves, they queue records, and releasing the talk button does not stand
+ * them down. See `CoHost`, which explains at length why the two are not one
+ * object.
+ *
+ * Broadcast to the whole room rather than to the console. The room hears this
+ * person for the rest of the evening and is owed their name, the same way it is
+ * owed a guest's; and the console reads the id off it to know which socket to
+ * offer a microphone to.
+ */
+export type CoHostMessage = CoHostSnapshot & { type: 'cohost' }
+
+/**
+ * How long two records overlap. Sent on connect and whenever it moves.
+ *
+ * Carried whether or not anything is playing, for the reason `duckTo` is
+ * carried whether or not the mic is open: a page always knows how to run the
+ * next transition before it is asked to, and the co-host's slider has something
+ * to show before the first one.
+ *
+ * A number, and the whole of the crossfade on the wire. What actually fades is
+ * two gain nodes in every listener's browser, against the two instants on the
+ * playback snapshot — the station carries no more of the transition than it
+ * carries of the music. See `Transition`.
+ */
+export type TransitionMessage = TransitionSnapshot & { type: 'transition' }
+
+/**
+ * Who has asked for the mic. To the decks, and to nobody else.
+ *
+ * The only frame the station volunteers to a subset of its sockets, and the
+ * closest thing here to `wished`, which goes to one. The reasoning is the wish
+ * book's: a raised hand is a request addressed to whoever runs the decks, not
+ * an announcement to the room. Put it in front of everybody and it becomes a
+ * queue the room can see, which is a social cost paid by the shyest person in
+ * it and a thing people will be nagged about.
+ *
+ * Sent to a console on connect as well as on change, so one opened after three
+ * hands went up does not start empty.
+ */
+export interface HandsMessage {
+  type: 'hands'
+  hands: Listener[]
 }
 
 /**
@@ -163,6 +319,17 @@ export type SocketErrorCode =
   | 'empty_wish'
   /** This station was built without a wish book. */
   | 'no_wishes'
+  /** This station was built without a floor: nobody but the decks can talk. */
+  | 'no_floor'
+  /**
+   * Took a microphone that was never offered.
+   *
+   * The whole of the permission story on the listener's side, and a refusal
+   * rather than a silent drop for the reason `not_the_decks` is one: a client
+   * that believes it is up would go on to offer a voice nobody is listening
+   * for, and would look, to the person holding it, exactly like being on air.
+   */
+  | 'not_invited'
   /** Doing that faster than the station will take it. */
   | 'slow_down'
   /**
@@ -177,6 +344,35 @@ export type SocketErrorCode =
    * them without ever finding out.
    */
   | 'muted'
+  /**
+   * A listener tried to signal something that is not the decks.
+   *
+   * The one rule the relay enforces on content, and the reason it is a refusal
+   * rather than a silent drop: a client that has this wrong is negotiating with
+   * a peer that will never answer, and would sit waiting on it forever.
+   */
+  | 'not_the_decks'
+  /**
+   * Signalling addressed to a socket that is not there: a listener who left
+   * between the roster and the offer, which is ordinary rather than an error.
+   */
+  | 'no_such_peer'
+  /**
+   * A listener tried to start a negotiation.
+   *
+   * The decks always offer and a listener never does — including the one who
+   * has been brought up, whose microphone is carried on a connection the decks
+   * offered `recvonly` and they answered. That is what keeps the negotiation
+   * the simplest one WebRTC allows, since two peers can only collide if both
+   * of them can start.
+   *
+   * Enforced here as well as on the console because it is nearly free: the
+   * station already reads `payload.kind` to decide a log level, so it can
+   * refuse this without ever parsing SDP and without acquiring an opinion about
+   * WebRTC versions it has no way to keep current. What it buys is that a
+   * listener cannot push audio at whoever runs the decks unasked.
+   */
+  | 'may_not_offer'
 
 /**
  * Which frame a refusal is about, when it is about one.
@@ -187,7 +383,7 @@ export type SocketErrorCode =
  * to know which composer. Without it, a wish refused for pace also lights up the
  * chat, telling someone a message they never sent was not sent.
  */
-export type SocketErrorAbout = 'join' | 'say' | 'wish'
+export type SocketErrorAbout = 'join' | 'say' | 'wish' | 'signal' | 'hand'
 
 export interface ErrorMessage {
   type: 'error'
@@ -208,9 +404,16 @@ export function errorMessage(
 }
 
 export type ServerMessage =
+  | YouMessage
+  | SignalMessage
   | StateMessage
   | AirMessage
   | ScheduleMessage
+  | MicMessage
+  | FloorMessage
+  | CoHostMessage
+  | TransitionMessage
+  | HandsMessage
   | QueueMessage
   | PresenceMessage
   | ChatMessagesMessage
@@ -263,7 +466,58 @@ export interface WishMessage {
   text: string
 }
 
-export type ClientMessage = PingMessage | JoinMessage | SayMessage | WishMessage
+/**
+ * "Pass this to that socket."
+ *
+ * The one frame a client sends that the station does not act on at all. It is
+ * carried, not read: `payload` is somebody's SDP or an ICE candidate, and the
+ * station has no opinion about any of it. What it does have an opinion about is
+ * `to`, which is the whole gate. See `SignalMessage`.
+ *
+ * This is also the one place the socket's read-only rule bends, and it bends
+ * narrowly on purpose: signalling mutates nothing and drives nothing, so it is
+ * not a command, and commands still go over HTTP where the admin gate is. What
+ * it *is* is privileged — only the decks may address a listener — which is why
+ * the socket now has to know which of its connections is the admin.
+ */
+export interface SignalClientMessage {
+  type: 'signal'
+  to: number
+  payload: unknown
+}
+
+/**
+ * "I'd like to say something", and the two answers to being taken up on it.
+ *
+ * On the socket rather than over HTTP, alongside `say` and `wish`, and for the
+ * same reason both of those are: a listener has no credentials, so this is the
+ * only channel they have. The console's half of the same conversation — who
+ * gets brought up, and who gets stood down — goes over HTTP where the admin
+ * gate is, which leaves the rule intact rather than bending it.
+ *
+ * Carries no id and no nickname, for the reason `say` carries no author: the
+ * socket is the identity, and the roster already knows what it is called. A
+ * frame that named its own listener would be a way to raise somebody else's
+ * hand, or to take a microphone that was offered to them.
+ *
+ * `lower` does three jobs — withdraw a hand, decline an invitation, come down
+ * off the mic — because they are one intent, and which of the three it is
+ * depends only on state the station already holds. Three verbs would be three
+ * chances for a client to pick the wrong one, and the worst of those is a guest
+ * pressing *leave* and staying on air.
+ */
+export interface HandMessage {
+  type: 'hand'
+  action: 'raise' | 'lower' | 'accept'
+}
+
+export type ClientMessage =
+  | PingMessage
+  | JoinMessage
+  | SayMessage
+  | WishMessage
+  | HandMessage
+  | SignalClientMessage
 
 /**
  * Frames that read as an attempt to drive the station.
@@ -294,6 +548,15 @@ const COMMAND_TYPES = new Set([
   'end_session',
   'mute',
   'unmute',
+  // Opening the mic is a command too, however live it feels. The `mic` frame
+  // travels the other way, and a client that tries to send one is a client
+  // that has mistaken being told for being able to tell.
+  'mic',
+  // Bringing somebody up is the console's decision and goes the same way. Note
+  // that `hand` — the listener's half — is not here and never will be: it is
+  // the one frame in this pair that has no gate to be behind, because asking
+  // is not deciding.
+  'floor',
 ])
 
 /** Either a message the socket will act on, or why it won't. */
@@ -311,6 +574,34 @@ export function airMessage(snapshot: AirSnapshot): AirMessage {
 
 export function scheduleMessage(next: ScheduleMessage['schedule']): ScheduleMessage {
   return { type: 'schedule', schedule: next }
+}
+
+export function micMessage(snapshot: MicSnapshot): MicMessage {
+  return { type: 'mic', ...snapshot }
+}
+
+export function floorMessage(snapshot: FloorSnapshot): FloorMessage {
+  return { type: 'floor', ...snapshot }
+}
+
+export function coHostMessage(snapshot: CoHostSnapshot): CoHostMessage {
+  return { type: 'cohost', ...snapshot }
+}
+
+export function transitionMessage(snapshot: TransitionSnapshot): TransitionMessage {
+  return { type: 'transition', ...snapshot }
+}
+
+export function handsMessage(hands: Listener[]): HandsMessage {
+  return { type: 'hands', hands }
+}
+
+export function youMessage(id: number, decks: boolean): YouMessage {
+  return { type: 'you', id, decks }
+}
+
+export function signalMessage(from: number, payload: unknown): SignalMessage {
+  return { type: 'signal', from, payload }
 }
 
 export function queueMessage(entries: QueueEntry[]): QueueMessage {
@@ -408,6 +699,45 @@ export function parseClientMessage(raw: string): ParsedClientMessage {
       return { ok: false, code: 'empty_wish', error: 'an empty wish is not a wish', about: 'wish' }
     }
     return { ok: true, message: { type: 'wish', text } }
+  }
+  if (message.type === 'hand' && typeof message.action === 'string') {
+    // The action is checked here and the *state* is checked in the socket
+    // layer, which is the only place that knows whether this listener was
+    // invited, is muted, or has said who they are. Same division as signalling
+    // beneath it: the parser owns the shape, the station owns the rules.
+    if (message.action !== 'raise' && message.action !== 'lower' && message.action !== 'accept') {
+      return {
+        ok: false,
+        code: 'unrecognised_message',
+        error: 'a hand goes up, comes down, or takes what was offered',
+        about: 'hand',
+      }
+    }
+    return { ok: true, message: { type: 'hand', action: message.action } }
+  }
+  if (message.type === 'signal') {
+    // `to` is checked here; *who may address it* is checked in the socket
+    // layer, which is the only place that knows which connections are the
+    // decks. The payload is not checked at all, on purpose: it is somebody
+    // else's SDP, and a station that validated it would be a station with an
+    // opinion about WebRTC versions it has no way to keep current.
+    if (typeof message.to !== 'number' || !Number.isInteger(message.to) || message.to <= 0) {
+      return {
+        ok: false,
+        code: 'unrecognised_message',
+        error: 'signalling needs a peer to address',
+        about: 'signal',
+      }
+    }
+    if (message.payload === undefined) {
+      return {
+        ok: false,
+        code: 'unrecognised_message',
+        error: 'signalling needs something to carry',
+        about: 'signal',
+      }
+    }
+    return { ok: true, message: { type: 'signal', to: message.to, payload: message.payload } }
   }
   if (typeof message.type === 'string' && COMMAND_TYPES.has(message.type)) {
     return {

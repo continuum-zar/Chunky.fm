@@ -2,7 +2,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { doorway, isServerPath } from '../src/lib/doorway.js'
+import { doorway, isServerPath, isStationPath } from '../src/lib/doorway.js'
 import { type Harness, startHarness } from './helpers.js'
 
 /**
@@ -16,6 +16,9 @@ import { type Harness, startHarness } from './helpers.js'
 
 const INDEX = '<!doctype html><title>station</title><div id="root"></div><script src="/assets/station-abc.js">'
 const LANDING = '<!doctype html><title>chunky.fm</title><div id="root"></div><script src="/assets/landing-abc.js">'
+const HOW = '<!doctype html><title>How chunky.fm works</title><h1>How chunky.fm works</h1>'
+const COHOST = '<!doctype html><title>chunky.fm \u00b7 co-host</title><div id="root"></div>'
+const NOT_FOUND = '<!doctype html><title>Not a page</title><h1>Nothing at this address</h1>'
 
 describe('doorway rules', () => {
   it('sends /welcome to the root, permanently', () => {
@@ -65,10 +68,74 @@ describe('doorway rules', () => {
     expect(doorway('/?k=')).toEqual({ kind: 'landing' })
   })
 
+  it('answers /how-it-works with the page that explains it', () => {
+    expect(doorway('/how-it-works')).toEqual({ kind: 'how' })
+    expect(doorway('/how-it-works?utm=x')).toEqual({ kind: 'how' })
+  })
+
+  it('sends a document filename to the one address that document has', () => {
+    // Every canonical link and every sitemap entry names these without the
+    // extension. Reachable at both, they are two pages to a crawler.
+    expect(doorway('/landing.html')).toEqual({ kind: 'redirect', status: 301, location: '/' })
+    expect(doorway('/how-it-works.html')).toEqual({
+      kind: 'redirect',
+      status: 301,
+      location: '/how-it-works',
+    })
+    expect(doorway('/index.html')).toEqual({
+      kind: 'redirect',
+      status: 301,
+      location: '/listen',
+    })
+  })
+
   it('leaves everything else alone', () => {
     expect(doorway('/listen')).toEqual({ kind: 'pass' })
     expect(doorway('/api/tracks')).toEqual({ kind: 'pass' })
     expect(doorway('/assets/station-abc.js')).toEqual({ kind: 'pass' })
+    // Not a prefix rule, the same way /welcome is not.
+    expect(doorway('/how-it-works-really')).toEqual({ kind: 'pass' })
+  })
+})
+
+describe('the co-host door', () => {
+  it('answers /cohost with its own document', () => {
+    expect(doorway('/cohost')).toEqual({ kind: 'cohost' })
+  })
+
+  it('answers a co-host link with the same document, key and all', () => {
+    // Unlike an invite at `/`, there is nowhere to forward this to: the page
+    // being served is the one with the code in it to redeem the key, and it
+    // reads it out of its own address bar. A redirect would put the secret
+    // through a second Location header and a second history entry for nothing.
+    expect(doorway('/cohost?k=abc123')).toEqual({ kind: 'cohost' })
+  })
+
+  it('sends the filename to the address the link actually says', () => {
+    expect(doorway('/cohost.html')).toEqual({
+      kind: 'redirect',
+      status: 301,
+      location: '/cohost',
+    })
+  })
+
+  it('is not caught by anything looser', () => {
+    expect(doorway('/cohosting')).toEqual({ kind: 'pass' })
+    expect(doorway('/cohost/seat')).toEqual({ kind: 'pass' })
+  })
+})
+
+describe('isStationPath', () => {
+  it('names the two paths that are the station', () => {
+    expect(isStationPath('/listen')).toBe(true)
+    expect(isStationPath('/admin')).toBe(true)
+  })
+
+  it('is everything an unknown path used to be, and no longer is', () => {
+    // The soft 404: every one of these was answered with the station and a 200.
+    expect(isStationPath('/whatever')).toBe(false)
+    expect(isStationPath('/listen/extra')).toBe(false)
+    expect(isStationPath('/')).toBe(false)
   })
 })
 
@@ -96,6 +163,9 @@ describe('serving the client from the server', () => {
     await fs.mkdir(path.join(clientDir, 'assets'))
     await fs.writeFile(path.join(clientDir, 'index.html'), INDEX)
     await fs.writeFile(path.join(clientDir, 'landing.html'), LANDING)
+    await fs.writeFile(path.join(clientDir, 'how-it-works.html'), HOW)
+    await fs.writeFile(path.join(clientDir, 'cohost.html'), COHOST)
+    await fs.writeFile(path.join(clientDir, '404.html'), NOT_FOUND)
     await fs.writeFile(path.join(clientDir, 'assets', 'station-abc.js'), 'console.log(1)')
     harness = await startHarness({ clientDir })
   })
@@ -133,13 +203,33 @@ describe('serving the client from the server', () => {
     expect(res.headers.location).toBe('/')
   })
 
-  it('answers an unknown path with the station', async () => {
-    // `/listen`, `/listen#chat` and anything else a listener types all land on
-    // the same document, which decides what to show from the fragment.
-    for (const url of ['/listen', '/admin', '/whatever']) {
+  it('answers the station paths with the station', async () => {
+    // The fragment never reaches the server, so `/listen` and `/listen#chat`
+    // are one request here, and there are exactly two paths to name.
+    for (const url of ['/listen', '/admin']) {
       const res = await harness.app.inject({ method: 'GET', url })
       expect(res.statusCode, url).toBe(200)
       expect(res.body, url).toContain('/assets/station-abc.js')
+    }
+  })
+
+  it('answers the explaining page, and does not put a bundle behind it', async () => {
+    const res = await harness.app.inject({ method: 'GET', url: '/how-it-works' })
+    expect(res.statusCode).toBe(200)
+    expect(res.headers['content-type']).toContain('text/html')
+    expect(res.body).toContain('How chunky.fm works')
+    expect(res.body).not.toContain('/assets/station-abc.js')
+  })
+
+  it('answers an address that is nothing with a page and a 404', async () => {
+    // Both halves. It used to be the station with a 200 on it, which told a
+    // crawler every typo was a real page and offered it an unlimited supply of
+    // duplicate stations.
+    for (const url of ['/whatever', '/listen/extra', '/lsiten']) {
+      const res = await harness.app.inject({ method: 'GET', url })
+      expect(res.statusCode, url).toBe(404)
+      expect(res.headers['content-type'], url).toContain('text/html')
+      expect(res.body, url).toContain('Nothing at this address')
     }
   })
 

@@ -5,7 +5,10 @@ import { mergePlays } from '../lib/history.js'
 import type {
   AirSnapshot,
   ChatMessage,
+  CoHostSnapshot,
+  FloorSnapshot,
   Listener,
+  MicSnapshot,
   Play,
   PlaybackSnapshot,
   QueueEntry,
@@ -13,6 +16,7 @@ import type {
   ServerMessage,
   SocketRefusal,
   StateMessage,
+  TransitionSnapshot,
   Wish,
 } from '../lib/protocol.js'
 import { StationConnection, type StationStatus } from '../lib/station.js'
@@ -45,12 +49,79 @@ export interface Station {
    */
   air: AirSnapshot | null
   /**
+   * This socket's own id, or null before the first frame arrives.
+   *
+   * Needed only by the voice, and needed by both ends of it: the decks must not
+   * offer themselves a microphone, and a listener answering an offer has to
+   * know the id it is reading is somebody else's. It changes on every reconnect,
+   * because a reconnect is a new socket and therefore a new row in the roster.
+   */
+  me: number | null
+  /**
+   * Whether the station considers this socket the decks.
+   *
+   * Null until the first frame. Signing in *after* the page loaded leaves a
+   * socket that presented no admin cookie, and this is the only way the page
+   * can tell — everything else about the console goes over HTTP and keeps
+   * working. See `epoch` on `useStation`.
+   */
+  decks: boolean | null
+  /**
    * When the station is next on, or null when nothing is announced.
    *
    * The other half of the sentence `air` starts, and the one thing here that
    * is not about tonight. See `ScheduleMessage`.
    */
   schedule: ScheduledSession | null
+  /**
+   * Whether somebody is talking over the music, and how far it drops while
+   * they are. Null until the first `mic` frame, which arrives in the connect
+   * burst before `state`, so the gap is a few milliseconds.
+   *
+   * Beside `air` rather than folded into `state` for the reason the queue is
+   * beside it: this changes twice a sentence and playback does not, and a page
+   * should not re-align its audio because somebody drew breath.
+   */
+  mic: MicSnapshot | null
+  /**
+   * Who, besides the decks, is on the mic — and who has just been asked up.
+   *
+   * Null until the first `floor` frame, which arrives in the connect burst
+   * immediately after `mic`, so a page that came in mid-call knows whose voice
+   * it is about to hear at the same moment it learns to duck for it.
+   *
+   * Beside `mic` rather than folded into it, for the reason `mic` is beside
+   * `air`: they change on entirely different schedules, and a page should not
+   * re-read who is talking every time somebody drew breath.
+   */
+  floor: FloorSnapshot | null
+  /**
+   * Who is co-hosting, and since when. Null until the first `cohost` frame,
+   * which arrives in the connect burst right after `floor`.
+   *
+   * Beside the floor rather than folded into it, because a co-host is not a
+   * guest: they arrived holding a key, they seated themselves, and releasing
+   * their talk button does not stand them down. The two can be occupied at
+   * once — a co-host and a caller — which is the shape a shared field could not
+   * carry. See the server's `cohost.ts`.
+   */
+  coHost: CoHostSnapshot | null
+  /**
+   * How long one record overlaps the next, in ms, and zero for a hard cut.
+   *
+   * Null until the first `transition` frame, which arrives right before the
+   * music for the reason `mic` does: a page told what is on without being told
+   * how long a transition runs would play the first one of the evening as a cut.
+   */
+  transition: TransitionSnapshot | null
+  /**
+   * Who has asked for the mic. Only ever populated on a console.
+   *
+   * Empty on every other page, and not because the client filters it: the
+   * station sends this frame to the decks and to nobody else. Who is *talking*
+   * is the room's business; who asked is not.
+   */
+  hands: Listener[]
   /** What's coming up. Null until the first queue frame arrives. */
   queue: QueueEntry[] | null
   /** Who else is here. Null until the first roster arrives. */
@@ -113,18 +184,52 @@ export interface Station {
   applyAir(snapshot: AirSnapshot): void
   /** Fold in what `PUT /api/schedule` just answered. See `applyState`. */
   applySchedule(next: ScheduledSession | null): void
+  /**
+   * Fold in what `POST /api/mic` just answered. See `applyState`, and note that
+   * this one earns it more than the others: the talk button is held down, and a
+   * console whose own duck waited for the round trip would hear the music drop
+   * after it had already started talking.
+   */
+  applyMic(snapshot: MicSnapshot): void
+  /** Fold in what `POST /api/floor` just answered. See `applyState`. */
+  applyFloor(snapshot: FloorSnapshot): void
+  /** Fold in what `POST /api/cohost/seat` just answered. See `applyState`. */
+  applyCoHost(snapshot: CoHostSnapshot): void
+  /**
+   * Fold in what `POST /api/transition` just answered. See `applyState`.
+   *
+   * Earns it the way `applyMic` does: this is a slider under somebody's thumb,
+   * and one that only moved when the round trip landed would feel broken.
+   */
+  applyTransition(snapshot: TransitionSnapshot): void
 }
 
 /** Holds the websocket open and tracks the station's broadcast state. */
+/**
+ * @param epoch Bump to throw the socket away and open a new one.
+ *
+ * There is exactly one reason to: a socket presents its cookies once, on the
+ * upgrade, and cannot change its mind. Signing in to the console after the page
+ * has loaded leaves a connection the station does not recognise as the decks,
+ * and the only way to fix that is a new connection. See `decks`.
+ */
 export function useStation(
   url: string = defaultStationUrl(),
   onMessage?: (message: ServerMessage) => void,
+  epoch = 0,
 ): Station {
   const [status, setStatus] = useState<StationStatus>('connecting')
   const [reach, setReach] = useState<Availability>(INITIALLY)
   const [state, setState] = useState<StateMessage | null>(null)
   const [air, setAir] = useState<AirSnapshot | null>(null)
+  const [me, setMe] = useState<number | null>(null)
+  const [decks, setDecks] = useState<boolean | null>(null)
   const [schedule, setSchedule] = useState<ScheduledSession | null>(null)
+  const [mic, setMic] = useState<MicSnapshot | null>(null)
+  const [floor, setFloor] = useState<FloorSnapshot | null>(null)
+  const [coHost, setCoHost] = useState<CoHostSnapshot | null>(null)
+  const [transition, setTransition] = useState<TransitionSnapshot | null>(null)
+  const [hands, setHands] = useState<Listener[]>([])
   const [queue, setQueue] = useState<QueueEntry[] | null>(null)
   const [listeners, setListeners] = useState<Listener[] | null>(null)
   const [padding, setPadding] = useState(0)
@@ -147,6 +252,22 @@ export function useStation(
     setAir(null)
     // And its own next evening.
     setSchedule(null)
+    // And its own answer to whether anybody is talking over it.
+    setMic(null)
+    // And its own answer to who is allowed to. The hands go with it: a list of
+    // people asking to speak on a station this page is no longer connected to
+    // is a list of decisions nobody can act on.
+    setFloor(null)
+    setHands([])
+    // And its own answer to who is co-hosting it, and to how it moves from one
+    // record to the next.
+    setCoHost(null)
+    setTransition(null)
+    // A new socket is a new row in the roster, so whatever this page was called
+    // on the last one says nothing about what it is called on this one, and
+    // nothing about what it presented on the way in.
+    setMe(null)
+    setDecks(null)
     const station = new StationConnection({
       url,
       onStatus: (next) => {
@@ -154,9 +275,24 @@ export function useStation(
         setReach((current) => nextAvailability(current, next))
       },
       onMessage: (message) => {
+        if (message.type === 'you') {
+          setMe(message.id)
+          setDecks(message.decks)
+        }
         if (message.type === 'state') setState(message)
-        if (message.type === 'air') setAir({ live: message.live, since: message.since })
+        if (message.type === 'air') {
+          setAir({ live: message.live, since: message.since, kind: message.kind })
+        }
         if (message.type === 'schedule') setSchedule(message.schedule)
+        if (message.type === 'mic') {
+          setMic({ live: message.live, duckTo: message.duckTo, since: message.since })
+        }
+        if (message.type === 'floor') {
+          setFloor({ speaker: message.speaker, invited: message.invited })
+        }
+        if (message.type === 'cohost') setCoHost({ seat: message.seat })
+        if (message.type === 'transition') setTransition({ blendMs: message.blendMs })
+        if (message.type === 'hands') setHands(message.hands)
         if (message.type === 'queue') setQueue(message.entries)
         if (message.type === 'presence') {
           setListeners(message.listeners)
@@ -193,7 +329,7 @@ export function useStation(
       station.close()
       setConnection(null)
     }
-  }, [url])
+  }, [url, epoch])
 
   const applyState = useCallback(
     (snapshot: PlaybackSnapshot) => setState({ type: 'state', ...snapshot }),
@@ -209,6 +345,13 @@ export function useStation(
    * console should not sit unchanged for a round trip.
    */
   const applySchedule = useCallback((next: ScheduledSession | null) => setSchedule(next), [])
+  const applyMic = useCallback((snapshot: MicSnapshot) => setMic(snapshot), [])
+  const applyFloor = useCallback((snapshot: FloorSnapshot) => setFloor(snapshot), [])
+  const applyCoHost = useCallback((snapshot: CoHostSnapshot) => setCoHost(snapshot), [])
+  const applyTransition = useCallback(
+    (snapshot: TransitionSnapshot) => setTransition(snapshot),
+    [],
+  )
   const clearSocketError = useCallback(() => setSocketError(null), [])
 
   return {
@@ -216,7 +359,14 @@ export function useStation(
     reach,
     state,
     air,
+    me,
+    decks,
     schedule,
+    mic,
+    floor,
+    coHost,
+    transition,
+    hands,
     queue,
     listeners,
     padding,
@@ -231,5 +381,9 @@ export function useStation(
     applyPadding,
     applyAir,
     applySchedule,
+    applyMic,
+    applyFloor,
+    applyCoHost,
+    applyTransition,
   }
 }

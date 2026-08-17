@@ -60,7 +60,8 @@ describe('nextSessionShort', () => {
 })
 
 describe('isUpcoming', () => {
-  const announced = (startsAt: number) => ({ startsAt, poster: null })
+  const announced = (startsAt: number) =>
+    ({ startsAt, poster: null, kind: 'set', title: null }) as const
 
   it('is nothing at all when nothing is announced', () => {
     expect(isUpcoming(null, NOW)).toBe(false)

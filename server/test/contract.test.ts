@@ -284,6 +284,7 @@ describe('the wire shapes the client compiles against', () => {
       { action: 'resume' },
       { action: 'seek', positionMs: 1_000 },
       { action: 'skip' },
+      { action: 'blend' },
       { action: 'stop' },
     ]) {
       const res = await harness.app.inject({
@@ -294,8 +295,13 @@ describe('the wire shapes the client compiles against', () => {
       })
       const label = JSON.stringify(payload)
       expect(res.statusCode, label).toBe(200)
-      // The same four keys the socket's `state` frame carries, minus `type`.
+      // The same five keys the socket's `state` frame carries, minus `type`.
       expect(Object.keys(res.json()).sort(), label).toEqual([
+        // What is still fading out under `track`, during a crossfade, and null
+        // the rest of the time. Present on every answer rather than only on the
+        // ones that could have set it: a field that came and went would be a
+        // client having to tell "no blend" from "this station does not blend".
+        'outgoing',
         'pausedAt',
         'serverTime',
         'startedAt',

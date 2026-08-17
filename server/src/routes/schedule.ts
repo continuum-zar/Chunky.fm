@@ -4,6 +4,7 @@ import { pipeline } from 'node:stream/promises'
 import fastifyStatic from '@fastify/static'
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify'
 import type { Config } from '../config.js'
+import type { SessionKind } from '../db.js'
 import { requireAdmin } from '../lib/auth.js'
 import { discard, posterFilePath } from '../lib/storage.js'
 import type { Schedule } from '../schedule.js'
@@ -51,6 +52,34 @@ function sniff(head: Buffer): string | null {
   return null
 }
 
+/**
+ * How long a title may be.
+ *
+ * A line on a poster rather than a description of the evening: it has to sit
+ * under a time on the page in front of the station and inside the one line the
+ * top bar has, and anything longer would be cut by a layout rather than by
+ * something that could tell whoever typed it. Cut here instead, where the limit
+ * is a rule somebody can read, and at a length that holds a theme ("Songs that
+ * sound like forgiveness") or a name and what they do.
+ */
+const TITLE_MAX_LENGTH = 80
+
+/**
+ * A typed title as it goes into the database, or null for no title at all.
+ *
+ * Empty is null rather than an empty string: a field somebody cleared and a
+ * field nobody filled in are the same announcement, and two spellings of it
+ * would be two things every reader has to check for. Whitespace is collapsed
+ * and control characters go with it, because this ends up in the markup of a
+ * public page and inside an `alt`, and a newline in the middle of a poster
+ * caption is somebody's paste of a whole paragraph arriving as a title.
+ */
+function toTitle(value: string): string | null {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: removing them is the point
+  const clean = value.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().replace(/\s+/g, ' ')
+  return clean.length > 0 ? clean.slice(0, TITLE_MAX_LENGTH) : null
+}
+
 interface ScheduleDeps {
   config: Config
   schedule: Schedule
@@ -95,11 +124,19 @@ export function scheduleRoutes({ config, schedule }: ScheduleDeps): FastifyPlugi
      * announcement, and it is the one somebody can make from a phone at short
      * notice. Sending no file *keeps* whatever poster is already up, so
      * changing the time by an hour does not mean finding the image again.
+     *
+     * `kind` and `title` are optional in the other direction: absent means a set
+     * with no title, not "leave what is there". Only the poster is kept across
+     * an edit, because only the poster costs something to send again. Two text
+     * fields a form fills in every time do not, and a rule that quietly kept
+     * them would make "clear the title" impossible to express.
      */
     app.put('/api/schedule', { preHandler: requireAdmin(config) }, async (request, reply) => {
       let startsAt: number | null = null
       let stored: string | null = null
       let sawFile = false
+      let kind: SessionKind = 'set'
+      let title: string | null = null
 
       try {
         for await (const part of request.parts({
@@ -108,6 +145,18 @@ export function scheduleRoutes({ config, schedule }: ScheduleDeps): FastifyPlugi
           if (part.type === 'field' && part.fieldname === 'startsAt') {
             const parsed = Number(part.value)
             if (Number.isFinite(parsed)) startsAt = Math.round(parsed)
+            continue
+          }
+          // Anything that is not one of the two known kinds is a set. A poster
+          // announcing the wrong sort of evening is a worse failure than a
+          // 400 would be inconvenient, but there is no third thing this could
+          // honestly mean, and the only sender is a form with two radios.
+          if (part.type === 'field' && part.fieldname === 'kind') {
+            kind = part.value === 'talk' ? 'talk' : 'set'
+            continue
+          }
+          if (part.type === 'field' && part.fieldname === 'title') {
+            title = typeof part.value === 'string' ? toTitle(part.value) : null
             continue
           }
           if (part.type !== 'file') continue
@@ -159,7 +208,7 @@ export function scheduleRoutes({ config, schedule }: ScheduleDeps): FastifyPlugi
       // request that left the file input alone apart from one that could not be
       // read, and only the first of those keeps what is there.
       const keeping = stored ?? (sawFile ? null : (schedule.get()?.poster ?? null))
-      const displaced = schedule.set({ startsAt, poster: keeping })
+      const displaced = schedule.set({ startsAt, poster: keeping, kind, title })
       if (displaced.poster) await discard(posterFilePath(config, displaced.poster))
 
       return body()

@@ -14,14 +14,22 @@
  * drifts in one of them is a difference nobody notices until whichever
  * environment holds the odd copy is the one in front of a listener. The rules:
  *
- *   /            the landing page, the document describing the station, which
- *                has to be able to speak on the days the station's own bundle
- *                would have nothing to say
- *   /?k=<key>    an invite, sent on to the station with the key intact
- *   /welcome     where the landing page used to live
+ *   /                   the landing page, the document describing the station,
+ *                       which has to be able to speak on the days the station's
+ *                       own bundle would have nothing to say
+ *   /?k=<key>           an invite, sent on to the station with the key intact
+ *   /welcome            where the landing page used to live
+ *   /how-it-works       the page explaining how the station does what it claims
+ *   /cohost             the co-host's control surface, its own document
+ *   /cohost?k=<key>     a co-host link, which is the same document: the page
+ *                       reads the key out of its own address bar, so unlike an
+ *                       invite there is nowhere else to send it
+ *   /*.html             the documents' own filenames, sent to the address the
+ *                       canonical links and the sitemap actually name
  *
- * `/listen` needs no rule anywhere: an unknown path is answered with the
- * station in all three, which is exactly what it is.
+ * `/listen` and `/admin` are the station, and they are now named rather than
+ * caught by a fallback — see `isStationPath`, and the note on it about why an
+ * unknown path stopped being answered with the station.
  */
 
 /**
@@ -37,8 +45,24 @@ export type Doorway =
   | { kind: 'redirect'; status: 301 | 302; location: string }
   /** The page in front of the station. */
   | { kind: 'landing' }
+  /** The page explaining how it works. Prose; no bundle behind it. */
+  | { kind: 'how' }
+  /** The co-host's control surface. Its own bundle; see `CO_HOST_PATH`. */
+  | { kind: 'cohost' }
   /** Not the doorway's business: a route, an asset, or the app itself. */
   | { kind: 'pass' }
+
+/** The address of the explaining page, spelled the same in all four copies. */
+export const HOW_PATH = '/how-it-works'
+
+/**
+ * The address of the co-host's page, spelled the same in all four copies.
+ *
+ * Kept in step with `CO_HOST_PATH` in the client's `src/lib/routes.ts` by hand,
+ * for the reason `INVITE_PARAM` is kept in step with the client's: nothing
+ * imports across the two workspaces.
+ */
+export const CO_HOST_PATH = '/cohost'
 
 /**
  * Where a request at the front door goes.
@@ -57,6 +81,37 @@ export function doorway(url: string): Doorway {
 
   if (path === '/welcome') {
     return { kind: 'redirect', status: 301, location: '/' }
+  }
+
+  if (path === HOW_PATH) {
+    return { kind: 'how' }
+  }
+
+  // The query is deliberately not read. A co-host link carries `?k=<key>` and
+  // the page redeems it out of its own address bar, so unlike an invite at `/`
+  // there is nowhere else for this to be sent: with a key or without one, the
+  // answer is the same document.
+  if (path === CO_HOST_PATH) {
+    return { kind: 'cohost' }
+  }
+
+  // The documents' own filenames. Every address that matters names them without
+  // the extension — the canonical links, the sitemap, every link the pages draw
+  // — so the filename is a second address for a page that already has one, and
+  // a page reachable at two addresses is two pages to a crawler. Sent to the
+  // one address rather than merely canonicalised away, so there is only ever
+  // one to canonicalise.
+  if (path === '/landing.html') {
+    return { kind: 'redirect', status: 301, location: '/' }
+  }
+  if (path === '/how-it-works.html') {
+    return { kind: 'redirect', status: 301, location: HOW_PATH }
+  }
+  if (path === '/cohost.html') {
+    return { kind: 'redirect', status: 301, location: CO_HOST_PATH }
+  }
+  if (path === '/index.html') {
+    return { kind: 'redirect', status: 301, location: '/listen' }
   }
 
   if (path === '/') {
@@ -85,5 +140,37 @@ export function doorway(url: string): Doorway {
  * every other refusal uses, not handed a page of HTML with a 200 on it.
  */
 export function isServerPath(path: string): boolean {
-  return path === '/health' || path === '/ws' || path.startsWith('/api/')
+  return path === '/health' || path === '/ws' || path.startsWith('/api/') || isCrawlPath(path)
+}
+
+/**
+ * The paths that are the station, named rather than assumed.
+ *
+ * The station is one document that decides what to show from the fragment, so
+ * `/listen`, `/listen#chat` and the `/admin` path the client still honours are
+ * all the same document — and the fragment never reaches the server, so there
+ * are exactly two paths to name.
+ *
+ * They used to need no naming: an unknown path was answered with the station.
+ * That is a soft 404 — every typo answered with a page and a 200, which tells a
+ * crawler that `/whatevr` is a real page and offers it as many duplicates of
+ * the station as anybody cares to invent. Two paths is a short enough list to
+ * write down, so it is written down, and everything else is told no.
+ */
+export function isStationPath(path: string): boolean {
+  return path === '/listen' || path === '/admin'
+}
+
+/**
+ * The files a crawler asks for, which the station answers rather than the
+ * bundle. See `routes/crawl.ts`.
+ *
+ * Here rather than only in the route table because the app-shell fallback has
+ * to know about them too: a request that somehow misses the routes must be told
+ * there is no such file, not handed a page of HTML with a 200 on it. A robots
+ * file that is a document is worse than one that is missing — the first is
+ * read and misunderstood, and the second is simply absent.
+ */
+export function isCrawlPath(path: string): boolean {
+  return path === '/robots.txt' || path === '/sitemap.xml' || path === '/llms.txt'
 }

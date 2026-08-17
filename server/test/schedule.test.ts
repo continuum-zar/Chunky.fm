@@ -22,9 +22,15 @@ const PNG = Buffer.concat([
  * A body carrying a time and, optionally, a poster. The schedule takes both in
  * one request, so this is `multipartBody` with a field alongside the file.
  */
-function posterBody(startsAt: number | null, file: Buffer | null) {
+function posterBody(
+  startsAt: number | null,
+  file: Buffer | null,
+  said: { kind?: string; title?: string } = {},
+) {
   const parts = []
   if (startsAt !== null) parts.push({ name: 'startsAt', data: Buffer.from(String(startsAt)) })
+  if (said.kind !== undefined) parts.push({ name: 'kind', data: Buffer.from(said.kind) })
+  if (said.title !== undefined) parts.push({ name: 'title', data: Buffer.from(said.title) })
   if (file !== null) {
     parts.push({ name: 'poster', filename: 'poster.png', contentType: 'image/png', data: file })
   }
@@ -33,32 +39,61 @@ function posterBody(startsAt: number | null, file: Buffer | null) {
 
 const SATURDAY = 1_700_500_000_000
 
+/** What an announcement that says nothing about itself comes out as. */
+const PLAIN = { kind: 'set', title: null } as const
+
 describe('Schedule', () => {
   it('holds one announcement, and replacing it hands back the poster it displaced', () => {
     const db = openDb(':memory:')
     const schedule = new Schedule({ db, now: () => 0 })
 
     expect(schedule.get()).toBeNull()
-    expect(schedule.set({ startsAt: SATURDAY, poster: 'a.png' })).toEqual({ poster: null })
-    expect(schedule.get()).toEqual({ startsAt: SATURDAY, poster: 'a.png' })
+    expect(schedule.set({ startsAt: SATURDAY, poster: 'a.png', ...PLAIN })).toEqual({ poster: null })
+    expect(schedule.get()).toEqual({ startsAt: SATURDAY, poster: 'a.png', ...PLAIN })
 
     // A new picture displaces the old one, which the caller then unlinks.
-    expect(schedule.set({ startsAt: SATURDAY, poster: 'b.png' })).toEqual({ poster: 'a.png' })
+    expect(schedule.set({ startsAt: SATURDAY, poster: 'b.png', ...PLAIN })).toEqual({
+      poster: 'a.png',
+    })
     // The same picture over a new time does not: changing the hour is the
     // ordinary edit, and unlinking there would blank the page.
-    expect(schedule.set({ startsAt: SATURDAY + 3600_000, poster: 'b.png' })).toEqual({
+    expect(schedule.set({ startsAt: SATURDAY + 3600_000, poster: 'b.png', ...PLAIN })).toEqual({
       poster: null,
     })
-    expect(schedule.get()).toEqual({ startsAt: SATURDAY + 3600_000, poster: 'b.png' })
+    expect(schedule.get()).toEqual({ startsAt: SATURDAY + 3600_000, poster: 'b.png', ...PLAIN })
+    db.close()
+  })
+
+  it('remembers which kind of night is being promised, and what it is called', () => {
+    const db = openDb(':memory:')
+    const schedule = new Schedule({ db })
+
+    schedule.set({
+      startsAt: SATURDAY,
+      poster: null,
+      kind: 'talk',
+      title: 'A conversation with Sipho',
+    })
+    expect(schedule.get()).toEqual({
+      startsAt: SATURDAY,
+      poster: null,
+      kind: 'talk',
+      title: 'A conversation with Sipho',
+    })
+
+    // And an announcement that goes back to being a set says so, rather than
+    // keeping the kind of the one it replaced.
+    schedule.set({ startsAt: SATURDAY, poster: null, ...PLAIN })
+    expect(schedule.get()).toEqual({ startsAt: SATURDAY, poster: null, ...PLAIN })
     db.close()
   })
 
   it('never keeps two, whatever it is asked', () => {
     const db = openDb(':memory:')
     const schedule = new Schedule({ db })
-    schedule.set({ startsAt: SATURDAY, poster: null })
-    schedule.set({ startsAt: SATURDAY + 1, poster: null })
-    schedule.set({ startsAt: SATURDAY + 2, poster: null })
+    schedule.set({ startsAt: SATURDAY, poster: null, ...PLAIN })
+    schedule.set({ startsAt: SATURDAY + 1, poster: null, ...PLAIN })
+    schedule.set({ startsAt: SATURDAY + 2, poster: null, ...PLAIN })
     expect(db.prepare('SELECT COUNT(*) AS n FROM schedule').get()).toEqual({ n: 1 })
     db.close()
   })
@@ -69,9 +104,9 @@ describe('Schedule', () => {
     const seen: unknown[] = []
     schedule.on('change', (next) => seen.push(next))
 
-    schedule.set({ startsAt: SATURDAY, poster: null })
+    schedule.set({ startsAt: SATURDAY, poster: null, ...PLAIN })
     schedule.clear()
-    expect(seen).toEqual([{ startsAt: SATURDAY, poster: null }, null])
+    expect(seen).toEqual([{ startsAt: SATURDAY, poster: null, ...PLAIN }, null])
     db.close()
   })
 
@@ -102,14 +137,14 @@ describe('the schedule over HTTP', () => {
 
   it('is readable by a stranger, on a station with a door on it', async () => {
     harness = await startHarness({ stationKey: 'sesame' })
-    harness.schedule.set({ startsAt: SATURDAY, poster: null })
+    harness.schedule.set({ startsAt: SATURDAY, poster: null, ...PLAIN })
 
     // Everything else on this private station refuses an unkeyed caller. A
     // poster is an advertisement: it is for the people who are not in yet.
     expect((await harness.app.inject({ url: '/api/tracks' })).statusCode).toBe(401)
     const res = await harness.app.inject({ url: '/api/schedule' })
     expect(res.statusCode).toBe(200)
-    expect(res.json()).toEqual({ schedule: { startsAt: SATURDAY, poster: null } })
+    expect(res.json()).toEqual({ schedule: { startsAt: SATURDAY, poster: null, ...PLAIN } })
   })
 
   it('answers null when nothing is announced, rather than 404', async () => {
@@ -202,13 +237,66 @@ describe('the schedule over HTTP', () => {
 
   it('survives a session, because it is about the next one', async () => {
     harness = await startHarness(undefined, { live: true })
-    harness.schedule.set({ startsAt: SATURDAY, poster: null })
+    harness.schedule.set({ startsAt: SATURDAY, poster: null, ...PLAIN })
 
     harness.air.end()
 
     // The chat, the queue and the library all go here. This is the one thing
     // that is about a night which has not happened yet.
-    expect(harness.schedule.get()).toEqual({ startsAt: SATURDAY, poster: null })
+    expect(harness.schedule.get()).toEqual({ startsAt: SATURDAY, poster: null, ...PLAIN })
+  })
+
+  it('takes the kind and the title alongside the time', async () => {
+    harness = await startHarness()
+    const res = await announce(
+      posterBody(SATURDAY, null, { kind: 'talk', title: '  A conversation with  Sipho ' }),
+    )
+
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual({
+      schedule: {
+        startsAt: SATURDAY,
+        poster: null,
+        kind: 'talk',
+        // Collapsed and trimmed on the way in: this ends up on a public page.
+        title: 'A conversation with Sipho',
+      },
+    })
+  })
+
+  it('is a set with no title when the fields are not sent at all', async () => {
+    harness = await startHarness()
+    const res = await announce(posterBody(SATURDAY, null))
+    // Which is what every announcement made before there were two kinds of
+    // night meant, and what the old two-field form still sends.
+    expect(res.json()).toEqual({ schedule: { startsAt: SATURDAY, poster: null, ...PLAIN } })
+  })
+
+  it('does not carry a title over an edit that clears it', async () => {
+    harness = await startHarness()
+    await announce(posterBody(SATURDAY, null, { kind: 'talk', title: 'Sipho' }))
+
+    const cleared = await announce(posterBody(SATURDAY, null, { kind: 'talk', title: '' }))
+    // Only the poster is kept across an edit, and only because a file costs
+    // something to send again. A title somebody emptied is emptied.
+    expect(cleared.json()).toEqual({
+      schedule: { startsAt: SATURDAY, poster: null, kind: 'talk', title: null },
+    })
+  })
+
+  it('caps a title at the length a poster line can hold', async () => {
+    harness = await startHarness()
+    const res = await announce(posterBody(SATURDAY, null, { title: 'x'.repeat(200) }))
+    const { schedule } = res.json() as { schedule: { title: string } }
+    expect(schedule.title).toHaveLength(80)
+  })
+
+  it('reads an unknown kind as a set rather than storing it', async () => {
+    harness = await startHarness()
+    const res = await announce(posterBody(SATURDAY, null, { kind: 'karaoke' }))
+    // There is no third kind of night, and a column the listener page cannot
+    // switch on would reach it as a session that renders as neither.
+    expect((res.json() as { schedule: { kind: string } }).schedule.kind).toBe('set')
   })
 })
 
@@ -218,7 +306,7 @@ describe('the schedule over the socket', () => {
 
   it('is sent on connect and broadcast when it changes', async () => {
     harness = await startHarness({}, { listen: true })
-    harness.schedule.set({ startsAt: SATURDAY, poster: 'a.png' })
+    harness.schedule.set({ startsAt: SATURDAY, poster: 'a.png', ...PLAIN })
 
     const client = await TestClient.connect(harness.wsUrl)
     expect(await client.nextSchedule()).toMatchObject({
@@ -227,9 +315,17 @@ describe('the schedule over the socket', () => {
 
     // A page left open on the off-air screen picks up an announcement made
     // after it loaded, which is the whole reason this is on the socket.
-    harness.schedule.set({ startsAt: SATURDAY + 3600_000, poster: null })
+    harness.schedule.set({
+      startsAt: SATURDAY + 3600_000,
+      poster: null,
+      kind: 'talk',
+      title: 'Sipho',
+    })
+    // Whole, rather than a hand-written subset: the socket used to spell out
+    // the two fields it knew about, which is how it would come to say less
+    // than the same announcement read over HTTP.
     expect(await client.nextSchedule()).toMatchObject({
-      schedule: { startsAt: SATURDAY + 3600_000, poster: null },
+      schedule: { startsAt: SATURDAY + 3600_000, poster: null, kind: 'talk', title: 'Sipho' },
     })
 
     harness.schedule.clear()

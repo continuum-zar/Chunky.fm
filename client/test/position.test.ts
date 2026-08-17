@@ -21,6 +21,9 @@ const state = (over: Partial<StateMessage> = {}): StateMessage => ({
   startedAt: 1_000_000,
   pausedAt: null,
   serverTime: 1_000_000,
+  // Nothing fading out. This module is about one record's needle; the two-deck
+  // arithmetic lives in `decking.ts` and is tested there.
+  outgoing: null,
   ...over,
 })
 

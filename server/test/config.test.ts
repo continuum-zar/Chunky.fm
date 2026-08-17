@@ -129,3 +129,77 @@ describe('the admin password', () => {
     expect(onlyDoor.adminPassword).toBe(loadConfig({}).adminPassword)
   })
 })
+
+/**
+ * The one place this station reaches somewhere it was not configured to.
+ *
+ * Everything else here is self-hosted on purpose — the audio, the artwork, even
+ * the gramophone's decoder is bundled rather than fetched — so a default that
+ * points at Google is worth a test that says so out loud rather than leaving it
+ * to be discovered by somebody reading a network tab.
+ */
+describe('finding another browser', () => {
+  it('asks a public STUN server by default', () => {
+    expect(loadConfig({}).stunUrls).toEqual(['stun:stun.l.google.com:19302'])
+  })
+
+  it('asks somewhere else when told to', () => {
+    expect(loadConfig({ STUN_URLS: 'stun:one:3478, stun:two:3478' }).stunUrls).toEqual([
+      'stun:one:3478',
+      'stun:two:3478',
+    ])
+  })
+
+  it('asks nobody when set to nothing', () => {
+    // Not the same as unset. This is a station that works for everybody on the
+    // same network and nobody beyond it, which is a real way to run one.
+    expect(loadConfig({ STUN_URLS: '' }).stunUrls).toEqual([])
+  })
+
+  it('has no relay unless one is configured', () => {
+    expect(loadConfig({}).turn).toBeNull()
+  })
+
+  it('takes a relay as all three parts', () => {
+    expect(
+      loadConfig({ TURN_URL: 'turn:relay:3478', TURN_USERNAME: 'sam', TURN_CREDENTIAL: 'pw' }).turn,
+    ).toEqual({ urls: ['turn:relay:3478'], username: 'sam', credential: 'pw' })
+  })
+
+  it('takes every address a relay offers, which is the point of them', () => {
+    // A provider hands you four of these and the differences are the whole
+    // reason: UDP is the fast path, TCP survives a network that drops it, and
+    // TLS on 443 gets through a firewall that only believes in HTTPS. The
+    // listener who needs a relay is usually the one on a phone, which is
+    // exactly where the strict networks are.
+    expect(
+      loadConfig({
+        TURN_URL: 'turn:relay:3478, turn:relay:80?transport=tcp, turns:relay:443?transport=tcp',
+        TURN_USERNAME: 'sam',
+        TURN_CREDENTIAL: 'pw',
+      }).turn?.urls,
+    ).toEqual(['turn:relay:3478', 'turn:relay:80?transport=tcp', 'turns:relay:443?transport=tcp'])
+  })
+
+  it('refuses half a relay at boot rather than in somebody’s ears', () => {
+    // A URL with no credentials is a relay that refuses every listener handed
+    // to it, and the symptom is one person in six silently not hearing a voice.
+    // Better to fail where somebody is looking.
+    expect(() => loadConfig({ TURN_URL: 'turn:relay:3478' })).toThrow(/together/)
+    expect(() => loadConfig({ TURN_URL: 'turn:relay:3478', TURN_USERNAME: 'sam' })).toThrow(/together/)
+    expect(() => loadConfig({ TURN_USERNAME: 'sam', TURN_CREDENTIAL: 'pw' })).toThrow(/together/)
+  })
+})
+
+describe('how much the station says', () => {
+  it('keeps to itself by default', () => {
+    expect(loadConfig({}).logLevel).toBe('info')
+  })
+
+  it('can be turned up, which is how an unconnectable voice is read', () => {
+    // At `debug` every relayed ICE candidate is a line: far too much to keep
+    // on, and exactly what is wanted for the ten minutes somebody is trying to
+    // find out why two browsers will not meet.
+    expect(loadConfig({ LOG_LEVEL: 'debug' }).logLevel).toBe('debug')
+  })
+})

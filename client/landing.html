@@ -12,12 +12,235 @@
          older links say) on to the app that can redeem it. -->
     <meta
       name="description"
-      content="A live radio station where everyone hears the same second of the same song, chosen by one person on the decks. No skips, no shuffle, no algorithm. One room, listening together."
+      content="An independent project exploring music, ideas and the people behind them. A live station where everyone hears the same second of the same song, and where some nights are a conversation with a guest on the mic instead of a set."
     />
     <!-- Same two vendored faces as the station, from the app's own origin. -->
+
+    <!-- The card a link turns into, and the tab it opens in.
+
+         This station spreads person to person — somebody says "you should be on
+         this at nine" and sends the address — so the preview is the first
+         impression far more often than a search result will ever be. It was a
+         grey rectangle with a hostname in it.
+
+         `%ORIGIN%` is substituted at build time from one line in vite.config.ts;
+         see the note there about why these have to be absolute and why Vite's
+         own env replacement is not what does it.
+
+         The image is drawn rather than screenshotted: see scripts/og-card.py,
+         which explains why a screenshot of the station is the wrong thing at
+         card size. -->
+    <link rel="canonical" href="%ORIGIN%/" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="chunky.fm" />
+    <meta property="og:url" content="%ORIGIN%/" />
+    <meta property="og:title" content="chunky.fm · everyone hears the same second" />
+    <meta
+      property="og:description"
+      content="An independent project exploring music, ideas and the people behind them. Everyone hears the same second of the same song, and some nights it is a conversation instead of a set."
+    />
+    <meta property="og:image" content="%ORIGIN%/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="chunky.fm — everyone hears the same second of the same song." />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="theme-color" content="#0a0a0a" />
+
+    <!-- The same station, said in the one form a machine will not misread.
+
+         Everything here is also in the prose below, which is the point: the
+         document argues to a reader and this states to a parser, and if the two
+         ever disagree the prose is what's true and this is what's wrong. Keep
+         them in step.
+
+         A graph rather than four separate blocks so the nodes can refer to each
+         other by `@id` — the page is *about* the station, the station is
+         *provided by* the organisation — instead of four disconnected
+         assertions that happen to share a name.
+
+         `BroadcastService` and not `RadioStation`: schema.org files the latter
+         under LocalBusiness, which wants a street address and opening hours and
+         means a transmitter in a building somewhere. There is no building.
+
+         `dateModified` is the freshness signal, substituted at build time from
+         vite.config.ts; see the note there about why it is the build and not a
+         date typed in by hand. -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "Organization",
+            "@id": "%ORIGIN%/#organization",
+            "name": "chunky.fm",
+            "url": "%ORIGIN%/",
+            "logo": "%ORIGIN%/apple-touch-icon.png",
+            "description": "An independent project exploring music, ideas and the people behind them: one live internet radio station, run as one room."
+          },
+          {
+            "@type": "BroadcastService",
+            "@id": "%ORIGIN%/#station",
+            "name": "chunky.fm",
+            "broadcastDisplayName": "chunky.fm",
+            "url": "%ORIGIN%/",
+            "description": "A live internet radio station where everyone listening hears the same second of the same song. One person chooses the records; there is no shuffle, no skipping and no algorithm. Some sessions are a conversation instead: a guest is brought up onto the air and the room listens in and can ask for the mic itself. Sessions happen on announced evenings and the station is deliberately off air in between.",
+            "inLanguage": "en",
+            "areaServed": "Worldwide",
+            "isAccessibleForFree": true,
+            "genre": ["Internet radio", "Music", "Talk radio", "Interview"],
+            "provider": { "@id": "%ORIGIN%/#organization" }
+          },
+          {
+            "@type": "WebSite",
+            "@id": "%ORIGIN%/#website",
+            "name": "chunky.fm",
+            "url": "%ORIGIN%/",
+            "inLanguage": "en",
+            "publisher": { "@id": "%ORIGIN%/#organization" }
+          },
+          {
+            "@type": "WebPage",
+            "@id": "%ORIGIN%/",
+            "url": "%ORIGIN%/",
+            "name": "chunky.fm · music wasn’t meant to be heard alone",
+            "description": "An independent project exploring music, ideas and the people behind them. A live station where everyone hears the same second of the same song, and where some nights are a conversation with a guest on the mic instead of a set.",
+            "isPartOf": { "@id": "%ORIGIN%/#website" },
+            "about": { "@id": "%ORIGIN%/#station" },
+            "primaryImageOfPage": "%ORIGIN%/og.png",
+            "inLanguage": "en",
+            "dateModified": "%BUILT%"
+          }
+        ]
+      }
+    </script>
+
+    <!-- The prelude below is styled here rather than in landing.css because it
+         has to hold up on its own: it is what a reader sees before the bundle
+         arrives, and what everything that does not run JavaScript sees instead
+         of the bundle. Both cases are ones where a stylesheet may not have
+         landed either, so this is small enough to inline and asks for nothing. -->
+    <style>
+      .prelude {
+        max-width: 34rem;
+        margin: 0 auto;
+        padding: 18vh 1.5rem 6rem;
+      }
+      .prelude h1 {
+        margin: 0 0 1.5rem;
+        font-size: clamp(1.75rem, 5vw, 2.75rem);
+        line-height: 1.15;
+        letter-spacing: -0.02em;
+      }
+      .prelude h2 {
+        margin: 2.5rem 0 1rem;
+        font-size: 1.125rem;
+        line-height: 1.3;
+        letter-spacing: -0.01em;
+      }
+      .prelude p {
+        margin: 0 0 1.25rem;
+        font-size: 1rem;
+        line-height: 1.7;
+      }
+      .prelude a {
+        color: inherit;
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <!--
+      What the document says without the bundle.
+
+      Everything this page argues used to live inside a React chunk, which meant
+      the served document was a title, one sentence and an empty div. A browser
+      recovers from that a few hundred kilobytes later. The things that decide
+      whether anybody ever finds this station mostly do not: the crawlers that
+      answer questions, and every link unfurler in every chat app, read the HTML
+      and take what is in it. They were reading almost nothing.
+
+      So the argument is here, in the document, served to everybody. React
+      replaces it on mount — `createRoot` empties its container — so there is
+      one copy of it on screen at a time and no hidden text anywhere, which is
+      the other way this is commonly done and is the way that gets a site
+      penalised.
+
+      It is deliberately not a <noscript>. A noscript is a consolation for a
+      browser that will not run the page; this is what the page *says*, and it
+      is true whether or not anything else ever loads.
+
+      Keep it in step with `Landing.tsx`. Not word for word — the page has
+      motion and a globe and this cannot — but a reader arriving at one after
+      the other must not feel they were told two different things.
+    -->
+    <div id="root">
+      <article class="prelude">
+        <h1>Music deserves more than an algorithm.</h1>
+
+        <p>
+          <strong
+            >chunky.fm is a live internet radio station where everyone listening hears the same
+            second of the same song.</strong
+          >
+          One person chooses the records. There is no shuffle, no skipping and no algorithm.
+          Sessions happen on announced evenings and end when they end — the station is deliberately
+          off air in between.
+        </p>
+
+        <h2>Everyone hears the same second</h2>
+
+        <p>
+          The room chooses the theme, and the set is put together over the day it plays. When the
+          broadcast begins, every browser tuned in aligns itself to the station’s own clock, so
+          people in different countries are inside the same bar of the same record at the same
+          instant. <a href="/how-it-works">How that is actually done</a> is written down.
+        </p>
+
+        <h2>The Listening Guide</h2>
+
+        <p>
+          Some songs don’t need better recommendations. They need better introductions. So the music
+          arrives with context beside it — where a record came from, what was happening around it,
+          what to listen for — and with a room of people hearing it at the same time.
+        </p>
+
+        <h2>And the room around it</h2>
+
+        <p>
+          You’re not listening beside people. You’re listening with them. There is a chat, a way to
+          ask for something, and a microphone whoever is on the decks can talk over the music with.
+          Listeners can put a hand up and be brought on air to say something themselves.
+        </p>
+
+        <h2>Not only records</h2>
+
+        <p>
+          Some sessions are a conversation rather than a set. A guest gets a link and turns up like
+          anybody else, is brought up onto the air, and the room hears the question and the answer
+          at the same second. Anyone listening can ask for the mic themselves.
+        </p>
+
+        <p>
+          chunky.fm is an independent project exploring music, ideas and the people behind them.
+          It’s still early, which is part of the point. I’m interested in building a place where
+          interesting conversations can happen without everything needing to become content.
+        </p>
+
+        <h2>Nothing to sign up for</h2>
+
+        <p>
+          There is no account and nothing to sign up for: you pick a name when you arrive and it
+          stays in your own browser. Listening is free. When the station is off air, this page says
+          when the next session is. The
+          <a href="/how-it-works">questions people ask before turning up</a> are answered too.
+        </p>
+
+        <h2>Join the room</h2>
+
+        <p><a href="/listen">Tune in</a></p>
+      </article>
+    </div>
     <script type="module" src="/src/landing/main.tsx"></script>
   </body>
 </html>

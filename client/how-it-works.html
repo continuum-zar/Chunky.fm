@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>How chunky.fm works · everyone hears the same second</title>
+
+    <!-- The third page, and the only one that explains rather than argues.
+         `/` makes the case for the station and `/listen` is the station; this
+         says how the thing actually does what the other two claim.
+
+         It carries no bundle on purpose. There is nothing on it that moves, and
+         a page whose whole job is to be read — by a person deciding whether to
+         turn up, and by whatever is going to answer a question about this — has
+         no business waiting on 470 kB of globe to say its first sentence.
+
+         Every number below is read off the code rather than remembered: the
+         probe count and spacing and the resync interval are in lib/clock.ts,
+         and the rate cap, the seek threshold and the deadband are in
+         lib/drift.ts. If those change, this is wrong until it changes too. -->
+    <meta
+      name="description"
+      content="How chunky.fm keeps every listener inside the same second of the same song: an NTP-style clock offset, playback-rate correction instead of seeking, and a session that is deliberately off air in between."
+    />
+
+    <link rel="canonical" href="%ORIGIN%/how-it-works" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta property="og:type" content="article" />
+    <meta property="og:site_name" content="chunky.fm" />
+    <meta property="og:url" content="%ORIGIN%/how-it-works" />
+    <meta property="og:title" content="How chunky.fm works" />
+    <meta
+      property="og:description"
+      content="An NTP-style clock offset, playback-rate correction instead of seeking, and a station that is deliberately off air between sessions."
+    />
+    <meta property="og:image" content="%ORIGIN%/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="chunky.fm — everyone hears the same second of the same song." />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="theme-color" content="#0a0a0a" />
+
+    <!-- Both types on one node: this is a page, and it is a page of questions
+         and answers. The `#website` and `#organization` nodes it refers to are
+         declared on `/` — an `@id` is global, so saying them twice would be
+         claiming two organisations with one name.
+
+         The answers below are the answers on the page, not a keyword-stuffed
+         second copy of them. A FAQPage whose markup and prose disagree is the
+         one way this markup gets a site penalised rather than quoted. -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": ["WebPage", "FAQPage"],
+            "@id": "%ORIGIN%/how-it-works",
+            "url": "%ORIGIN%/how-it-works",
+            "name": "How chunky.fm works",
+            "description": "How chunky.fm keeps every listener inside the same second of the same song: an NTP-style clock offset, playback-rate correction instead of seeking, and a session that is deliberately off air in between.",
+            "isPartOf": { "@id": "%ORIGIN%/#website" },
+            "about": { "@id": "%ORIGIN%/#station" },
+            "inLanguage": "en",
+            "dateModified": "%BUILT%",
+            "mainEntity": [
+              {
+                "@type": "Question",
+                "name": "How does everyone hear the same second of the same song?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Nothing is streamed. Each browser fetches the recording and plays it itself, then works out how far its own clock sits from the station's and starts at the position the station says it is at. It keeps measuring while the song plays, and corrects by changing playback speed by up to two percent rather than by seeking."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Why can't I just play these songs myself tomorrow?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "You can. What you cannot do alone is hear a room react to a record at the moment it lands. The songs are the same; hearing them at the same instant as everyone else, with whoever chose them talking over the intro, is the part that does not survive being played back later."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Do I need an account to listen to chunky.fm?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "No. There is no account and nothing to sign up for. You pick a name when you arrive and it is kept in your own browser."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Is chunky.fm free?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Yes. Listening is free and there is nothing to pay for."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Why is the station off air most of the time?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Because a session everyone turns up to is the whole point. Sessions happen on announced evenings and end when they end. When the station is off air, the front page says when the next one is."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Can I request a song or talk on air?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Both. There is a chat and a way to ask for something, and whoever is on the decks can talk over the music. A listener can put a hand up and be brought on air to say something themselves."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Is chunky.fm only music?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "No. A session is either a set of records or a conversation, and the station says which. A conversation runs on the same shared clock as the music: a guest is brought up onto the air and everyone hears the question and the answer at the same second, with the room able to ask for the mic itself."
+                }
+              }
+            ]
+          }
+        ]
+      }
+    </script>
+
+    <style>
+      html {
+        color-scheme: dark;
+      }
+      body {
+        margin: 0;
+        background: #0a0a0a;
+        color: #f2f2f2;
+        font-family:
+          ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      }
+      .page {
+        max-width: 38rem;
+        margin: 0 auto;
+        padding: 10vh 1.5rem 8rem;
+      }
+      .page h1 {
+        margin: 0 0 1.5rem;
+        font-size: clamp(1.75rem, 5vw, 2.75rem);
+        line-height: 1.15;
+        letter-spacing: -0.02em;
+      }
+      .page h2 {
+        margin: 3rem 0 1rem;
+        font-size: 1.25rem;
+        line-height: 1.3;
+        letter-spacing: -0.01em;
+      }
+      .page h3 {
+        margin: 2rem 0 0.75rem;
+        font-size: 1rem;
+        line-height: 1.4;
+      }
+      .page p {
+        margin: 0 0 1.25rem;
+        font-size: 1rem;
+        line-height: 1.7;
+        color: #cfcfcf;
+      }
+      .page a {
+        color: #f2f2f2;
+      }
+      .lede {
+        color: #f2f2f2;
+        font-size: 1.0625rem;
+      }
+      .ways {
+        margin: 3.5rem 0 0;
+        padding: 1.5rem 0 0;
+        border-top: 1px solid #262626;
+        font-size: 0.9375rem;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <h1>How chunky.fm works</h1>
+
+      <p class="lede">
+        <a href="/">chunky.fm</a> is a live internet radio station where everyone listening hears the
+        same second of the same song. One person chooses the records. This page is how that is
+        actually done, for anybody who wants to know before they
+        <a href="/listen">tune in</a>.
+      </p>
+
+      <h2>Nothing is streamed</h2>
+
+      <p>
+        The obvious way to put thirty people inside the same second is to send them all one stream.
+        This does the opposite. Each browser fetches the recording and plays it itself, so what
+        crosses the network is a file, once, and not a sound in progress. Nobody's audio passes
+        through the server while the session is running.
+      </p>
+
+      <p>
+        Which leaves the actual problem: thirty browsers each playing the same file, and no reason
+        any two of them should be in the same place in it.
+      </p>
+
+      <h2>Every browser works out how wrong its own clock is</h2>
+
+      <p>
+        A computer's clock is usually wrong by some seconds, and every decision here is made against
+        a timestamp from the station. So before a browser can align to anything it has to know the
+        gap between its clock and the station's.
+      </p>
+
+      <p>
+        It measures the gap the way
+        <a href="https://en.wikipedia.org/wiki/Network_Time_Protocol" rel="noopener"
+          >the Network Time Protocol</a
+        >
+        does: send a probe, note when it left and when the reply came back, and assume the trip took
+        the same time in each direction. Five probes go out, a hundred and fifty milliseconds apart
+        so they don't queue behind each other, and the fastest round trip wins rather than the
+        average — the quickest reply is the one least contaminated by a delay that had nothing to do
+        with distance. The measurement is repeated every thirty seconds, because the browser's own
+        clock drifts too.
+      </p>
+
+      <h2>Staying together is a different problem from starting together</h2>
+
+      <p>
+        Starting in the right place is arithmetic. Staying there is not: the clock that paces audio
+        playback runs slightly fast or slow against the clock that tells the time, so a browser that
+        was exactly right a minute ago is measurably off now.
+      </p>
+
+      <p>
+        The correction is deliberately not a seek. Seeking is audible — it is a gap and then a jolt,
+        and doing it every minute would make the station unlistenable. Instead the playback
+        <em>speed</em> is nudged, by at most two percent in either direction, until the error is
+        gone. Browsers preserve pitch when playback rate changes
+        (<a
+          href="https://developer.mozilla.org/en-US/docs/Web/API/HTMLMediaElement/preservesPitch"
+          rel="noopener"
+          ><code>preservesPitch</code></a
+        >
+        is the property, and it defaults to on), so two percent time-stretches the music instead of
+        transposing it, and at two percent there is nothing to hear.
+      </p>
+
+      <p>
+        Under fifty milliseconds of error nothing happens at all, because correcting that would be
+        fidgeting. Over a full second something has gone wrong enough that waiting for a two percent
+        nudge would take minutes, so it seeks and accepts the glitch.
+      </p>
+
+      <h2>The room, and the microphone in it</h2>
+
+      <p>
+        There is a chat, and a way to ask for a record. Whoever is on the decks has a microphone
+        they can talk over the music with, and a listener can put a hand up and be brought on air to
+        say something themselves — voice goes over
+        <a href="https://developer.mozilla.org/en-US/docs/Web/API/WebRTC_API" rel="noopener"
+          >WebRTC</a
+        >, peer to peer, which is why it arrives in step with the record rather than a few seconds
+        behind it.
+      </p>
+
+      <h2>Sessions end</h2>
+
+      <p>
+        A session is a set of records or a conversation, decided when the station goes on and said
+        on the page while it is: an empty deck during a set is a gap between songs, and during a
+        conversation it is the programme.
+      </p>
+
+      <p>
+        The station is off air between them, on purpose, and the
+        <a href="/">front page</a> says when the next one is. Some songs don't need better
+        recommendations so much as better introductions, and an introduction needs somebody there to
+        hear it.
+      </p>
+
+      <h2>Questions</h2>
+
+      <h3>How does everyone hear the same second of the same song?</h3>
+
+      <p>
+        Nothing is streamed. Each browser fetches the recording and plays it itself, then works out
+        how far its own clock sits from the station's and starts at the position the station says it
+        is at. It keeps measuring while the song plays, and corrects by changing playback speed by
+        up to two percent rather than by seeking.
+      </p>
+
+      <h3>Why can't I just play these songs myself tomorrow?</h3>
+
+      <p>
+        You can. What you cannot do alone is hear a room react to a record at the moment it lands.
+        The songs are the same; hearing them at the same instant as everyone else, with whoever
+        chose them talking over the intro, is the part that does not survive being played back
+        later.
+      </p>
+
+      <h3>Do I need an account to listen to chunky.fm?</h3>
+
+      <p>
+        No. There is no account and nothing to sign up for. You pick a name when you arrive and it
+        is kept in your own browser.
+      </p>
+
+      <h3>Is chunky.fm free?</h3>
+
+      <p>Yes. Listening is free and there is nothing to pay for.</p>
+
+      <h3>Why is the station off air most of the time?</h3>
+
+      <p>
+        Because a session everyone turns up to is the whole point. Sessions happen on announced
+        evenings and end when they end. When the station is off air, the front page says when the
+        next one is.
+      </p>
+
+      <h3>Can I request a song or talk on air?</h3>
+
+      <p>
+        Both. There is a chat and a way to ask for something, and whoever is on the decks can talk
+        over the music. A listener can put a hand up and be brought on air to say something
+        themselves.
+      </p>
+
+      <h3>Is chunky.fm only music?</h3>
+
+      <p>
+        No. A session is either a set of records or a conversation, and the station says which one
+        it is running. A conversation is on the same shared clock as the music: a guest is brought
+        up onto the air and everyone hears the question and the answer at the same second, with the
+        room able to ask for the mic itself. Nothing about the machinery above changes for one; what
+        changes is what an empty deck means, which is why the page is told which kind of night it is
+        rather than left to guess from the silence.
+      </p>
+
+      <p class="ways">
+        <a href="/">What chunky.fm is</a> · <a href="/listen">Tune in</a>
+      </p>
+    </main>
+  </body>
+</html>

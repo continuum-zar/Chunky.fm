@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- `viewport-fit=cover` and `user-scalable=no` are both deliberate, and
+         only on this page. This is a control surface held in one hand: the talk
+         button has to reach the bottom of the screen past the home indicator,
+         and a double-tap on a transport button must move a record rather than
+         zoom the page. Neither is right for the station or the landing page,
+         which are things you read. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
+    <title>chunky.fm · co-host</title>
+    <meta
+      name="description"
+      content="The other side of the decks: talk over the record, line up what plays next, and take the transitions."
+    />
+
+    <!-- Nothing here is for a crawler and nothing should be. A co-host link is
+         a credential; a page that advertised itself would be inviting somebody
+         to go looking for one. robots.txt disallows this path too. -->
+    <meta name="robots" content="noindex, nofollow" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="theme-color" content="#0a0a0a" />
+    <!-- So that a co-host who adds this to their home screen — which is exactly
+         what somebody doing this every week will do — gets the control surface
+         and not a browser chrome wrapped around it. -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/cohost/main.tsx"></script>
+  </body>
+</html>

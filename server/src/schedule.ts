@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events'
-import type { Db, ScheduleRow } from './db.js'
+import type { Db, ScheduleRow, SessionKind } from './db.js'
 
 /**
  * The next session, announced before it happens.
@@ -33,6 +33,26 @@ export interface ScheduledSession {
   startsAt: number
   /** The poster's filename under `posterDir`, or null for a time alone. */
   poster: string | null
+  /**
+   * Which kind of night is being promised.
+   *
+   * A poster for a conversation and a poster for a set are advertisements for
+   * different evenings, and somebody deciding whether to turn up is deciding
+   * about the difference. It is the one thing the page in front of the station
+   * could not say before, so every announcement said "records" by omission.
+   */
+  kind: SessionKind
+  /**
+   * What it is called: the theme, or who is coming on. Null for a time and a
+   * picture, which is what an announcement was until now and is still one.
+   *
+   * The one field here that is free text somebody typed, which is why the route
+   * that accepts it caps and trims it. It is also public in a way nothing else
+   * on this station is: it goes on the page in front of the station, where the
+   * people who have not been invited yet are. Nothing may go in it that is not
+   * meant for them.
+   */
+  title: string | null
 }
 
 export declare interface Schedule {
@@ -61,7 +81,9 @@ export class Schedule extends EventEmitter {
     const row = this.#db.prepare('SELECT * FROM schedule WHERE id = 1').get() as
       | ScheduleRow
       | undefined
-    return row ? { startsAt: row.starts_at, poster: row.poster } : null
+    return row
+      ? { startsAt: row.starts_at, poster: row.poster, kind: row.kind, title: row.title }
+      : null
   }
 
   /**
@@ -76,14 +98,22 @@ export class Schedule extends EventEmitter {
     const previous = this.get()
     this.#db
       .prepare(
-        `INSERT INTO schedule (id, starts_at, poster, set_at)
-         VALUES (1, @starts_at, @poster, @set_at)
+        `INSERT INTO schedule (id, starts_at, poster, set_at, kind, title)
+         VALUES (1, @starts_at, @poster, @set_at, @kind, @title)
          ON CONFLICT(id) DO UPDATE SET
            starts_at = excluded.starts_at,
            poster    = excluded.poster,
-           set_at    = excluded.set_at`,
+           set_at    = excluded.set_at,
+           kind      = excluded.kind,
+           title     = excluded.title`,
       )
-      .run({ starts_at: next.startsAt, poster: next.poster, set_at: this.#now() })
+      .run({
+        starts_at: next.startsAt,
+        poster: next.poster,
+        set_at: this.#now(),
+        kind: next.kind,
+        title: next.title,
+      })
 
     this.emit('change', this.get())
     // Only when it is genuinely gone. Keeping the same poster over a change of

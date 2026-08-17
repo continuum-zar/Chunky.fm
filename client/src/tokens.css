@@ -51,6 +51,26 @@
 
   --pill: 999px;
 
+  /* --- how big a thing you press is ---------------------------------------
+   * Two heights, and one rule for choosing between them: the larger is for a
+   * control that is the point of whatever it sits in (tune in, hold to talk,
+   * go up), the smaller for one standing in a row of its peers. Written here
+   * rather than per-component because a phone lifts the whole set at once —
+   * see the `pointer: coarse` block at the foot of styles.css, which is the
+   * only place either number is overridden.
+   *
+   * 36 rather than the 30 these used to be. 30px is a control drawn for a
+   * cursor on a desk, and this station is used on a phone in a kitchen: the
+   * difference between the two is a button somebody misses while a record is
+   * ending. */
+  --control: 36px;
+  --control-lg: 44px;
+
+  /* The distance between a card's edge and anything inside it. One number, so
+     a heading, a list and a footer in the same card cannot disagree about
+     where the left margin is — which is most of what "squeezed" looks like. */
+  --card-pad: 20px;
+
   --font: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
   /* Everything that counts (clocks, tallies, head counts, track numbers)
      so a digit changing never shifts what is beside it. */

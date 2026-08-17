@@ -13,6 +13,49 @@ export interface Track {
   uploadedAt: number
 }
 
+/**
+ * Who this socket is. The first frame of all, and the only one about this
+ * browser rather than about the station.
+ *
+ * The id is the same one the roster carries. Nothing needed it until a voice
+ * had to be addressed: the decks offer to a listener by id and so must know
+ * which id *not* to offer to — whoever runs the station is usually tuned in as
+ * well — and a listener answers whoever offered, which means reading an id off
+ * a frame and knowing it is not their own.
+ */
+export interface YouMessage {
+  type: 'you'
+  id: number
+  /**
+   * Whether the station considers this socket the decks.
+   *
+   * A socket presents its credentials once, on the upgrade, and cannot change
+   * its mind afterwards. The console opens its socket when the page loads,
+   * which is before anybody has signed in — so a sign-in that happens after
+   * that leaves a connection carrying no admin cookie, on a page that otherwise
+   * works perfectly, because commands go over HTTP and HTTP does carry it.
+   *
+   * The only symptom is that no listener can be offered a voice, and it is
+   * silent. This is how the page finds out, and what tells it to reconnect.
+   */
+  decks: boolean
+}
+
+/**
+ * One end of a WebRTC negotiation, relayed by the station.
+ *
+ * The station carries these without reading them, the same way it carries no
+ * audio: `payload` is an offer, an answer or an ICE candidate. What it does
+ * decide is who may send one to whom — the decks may reach any listener, a
+ * listener may reach only the decks — and `from` is stamped by the server, so a
+ * frame cannot claim to be from somebody it is not.
+ */
+export interface SignalMessage {
+  type: 'signal'
+  from: number
+  payload: unknown
+}
+
 export interface StateMessage {
   type: 'state'
   track: Track | null
@@ -21,6 +64,43 @@ export interface StateMessage {
   /** Position in ms while paused; null while playing. */
   pausedAt: number | null
   serverTime: number
+  /**
+   * The record still finishing under this one, during a crossfade. Null the
+   * rest of the time, and null always on a station whose blend is zero.
+   *
+   * `track` above is unchanged in meaning: it is what is on, and during an
+   * overlap that is the incoming record from the instant it starts. Everything
+   * that reads `track` — the lyrics, the history, the media session, the
+   * now-playing line — wants the new one the moment the blend begins, and gets
+   * it without knowing this field exists.
+   *
+   * So this is additive and ignorable, which is the property that matters: a
+   * page that has never heard of it plays the incoming track on the clock and
+   * cuts. Both stay on the shared clock.
+   */
+  outgoing: Outgoing | null
+}
+
+/**
+ * A record on its way out. See the server's `playback.ts`, which owns this.
+ *
+ * Two absolute instants rather than a length, so a listener who joins *during*
+ * a crossfade can work out where in it they have landed rather than being told
+ * how long it was for whoever was already here. The fade window is exactly
+ * `[state.startedAt, outgoing.endsAt]` — the incoming record's beginning to the
+ * outgoing one's end — and neither end has to be inferred.
+ */
+export interface Outgoing {
+  track: Track
+  /** Server epoch ms at which the outgoing track was at 0:00. */
+  startedAt: number
+  /**
+   * Server epoch ms at which it stops, and the far end of the blend.
+   *
+   * Its natural end when the station reached the transition by running out of
+   * record. Sooner when somebody pressed the transition button halfway through.
+   */
+  endsAt: number
 }
 
 /**
@@ -45,10 +125,134 @@ export interface AirMessage {
   live: boolean
   /** Server epoch ms at which this stretch on air began; null while off. */
   since: number | null
+  /**
+   * Which kind of night this is, and null while there is no night.
+   *
+   * A fourth thing a page can be looking at, and the one the sentences above
+   * were quietly wrong about: a station on air with nothing on the decks is a
+   * gap between songs during a set, and during a conversation it is the
+   * ordinary state of the whole evening. Same empty deck, opposite meaning, and
+   * nothing before this frame carried the difference.
+   */
+  kind: SessionKind | null
 }
 
-/** The same pair as it comes back from `/api/session`, without the frame. */
+/**
+ * What kind of night a session is. See the server's `db.ts`, which owns this.
+ *
+ * `set` is records with the room around them. `talk` is the same room and the
+ * same shared clock with a conversation in the middle of it. Neither forbids
+ * the other's furniture: a talk session can put a record on, and a set has
+ * always been able to open the mic.
+ */
+export type SessionKind = 'set' | 'talk'
+
+/** The same three as they come back from `/api/session`, without the frame. */
 export type AirSnapshot = Omit<AirMessage, 'type'>
+
+/**
+ * Whether somebody is talking over the music, and how far it drops while they
+ * are. Sent on connect — before `state`, so a listener arriving mid-break comes
+ * in already ducked — and again on every change.
+ *
+ * This is the whole of the talkover on the wire, and it carries no audio. The
+ * station does not mix: what it broadcasts is the fact and the depth, and every
+ * browser turns down the copy of the track it is already playing. So the duck
+ * works whether or not anything else does, and lands everywhere at the same
+ * instant, on the clock the room already shares.
+ */
+export interface MicMessage {
+  type: 'mic'
+  live: boolean
+  /**
+   * Linear gain the music sits at while the mic is hot. Carried whether or not
+   * the mic is open, so a page always knows how far to duck before it is asked
+   * to, and the console's slider has something to show before the first break.
+   */
+  duckTo: number
+  /** Server epoch ms at which the mic opened; null while it is shut. */
+  since: number | null
+}
+
+/** The same three as they come back from `/api/mic`, without the frame. */
+export type MicSnapshot = Omit<MicMessage, 'type'>
+
+/**
+ * Who, besides the decks, is allowed to talk. Sent on connect and on change.
+ *
+ * The mic frame beside this one says the music should sit down and how far;
+ * this says whose voice it is sitting down for. Carries no audio either — a
+ * guest's voice goes from their browser to the console and out again on the
+ * connections the room already has, and the station holds no more of it than it
+ * holds of the music.
+ *
+ * `invited` is broadcast rather than sent to the one page it concerns. The
+ * guest reads their own id off it, and a room that can see somebody being
+ * brought up reads the pause before a voice for what it is.
+ */
+export interface FloorMessage {
+  type: 'floor'
+  speaker: (Listener & { since: number }) | null
+  invited: (Listener & { expiresAt: number }) | null
+}
+
+/** The same two as they come back from `/api/floor`, without the frame. */
+export type FloorSnapshot = Omit<FloorMessage, 'type'>
+
+/**
+ * Who is co-hosting. Sent on connect and on every change.
+ *
+ * The third of the frames about voices, and it is neither of the other two. The
+ * floor is a listener the decks brought up, which is a favour granted and
+ * revocable. This is somebody who arrived holding a key: they seated
+ * themselves, they queue records, and releasing their talk button does not
+ * stand them down.
+ *
+ * Broadcast to the whole room. The room hears this person all evening and is
+ * owed their name; the console reads the id off it to know which socket to
+ * offer a second microphone to; and the co-host's own page reads it to find out
+ * whether it still holds the seat after a reconnect.
+ */
+export interface CoHostMessage {
+  type: 'cohost'
+  seat: (Listener & { since: number }) | null
+}
+
+/** The same one as it comes back from `/api/cohost`, without the frame. */
+export type CoHostSnapshot = Omit<CoHostMessage, 'type'>
+
+/**
+ * How long one record overlaps the next, in ms. Zero is a hard cut.
+ *
+ * The whole of the crossfade on the wire. What actually fades is two gain nodes
+ * in every listener's browser, against the two instants on the playback
+ * snapshot — the station carries no more of a transition than it carries of the
+ * music, which is the same trick the duck plays one turn further.
+ *
+ * Carried whether or not anything is playing, for the reason `duckTo` is: a
+ * page always knows how to run the next transition before it is asked to, and
+ * the co-host's slider has something to show before the first one.
+ */
+export interface TransitionMessage {
+  type: 'transition'
+  blendMs: number
+}
+
+/** The same one as it comes back from `/api/transition`, without the frame. */
+export type TransitionSnapshot = Omit<TransitionMessage, 'type'>
+
+/**
+ * Who has asked for the mic. Only a console is ever sent one of these.
+ *
+ * The private half of the floor, and the reason it is a separate frame: who is
+ * talking is the room's business, and who *asked* is not. A queue the room can
+ * see is a social cost paid by the shyest person in it. Same split as the wish
+ * book, for the same reasons.
+ */
+export interface HandsMessage {
+  type: 'hands'
+  hands: Listener[]
+}
 
 /** A track waiting its turn. The id is the entry's, not the track's. */
 export interface QueueEntry {
@@ -180,6 +384,10 @@ export type SocketErrorCode =
   | 'slow_down'
   | 'off_air'
   | 'muted'
+  | 'not_the_decks'
+  | 'no_such_peer'
+  | 'no_floor'
+  | 'not_invited'
 
 /**
  * Which frame a refusal is about, when it is about one.
@@ -189,7 +397,7 @@ export type SocketErrorCode =
  * for pace also puts "not sent" under the chat, telling someone a message they
  * never sent went nowhere.
  */
-export type SocketErrorAbout = 'join' | 'say' | 'wish'
+export type SocketErrorAbout = 'join' | 'say' | 'wish' | 'signal' | 'hand'
 
 export interface ErrorMessage {
   type: 'error'
@@ -236,6 +444,16 @@ export function refusalAbout(
 export interface ScheduledSession {
   startsAt: number
   poster: string | null
+  /**
+   * Which kind of night is being promised.
+   *
+   * A poster for a conversation and a poster for a set advertise different
+   * evenings, and this is the field that lets the page in front of the station
+   * say which. Before it, every announcement said "records" by omission.
+   */
+  kind: SessionKind
+  /** The theme, or who is coming on. Null for a time and a picture alone. */
+  title: string | null
 }
 
 export interface ScheduleMessage {
@@ -244,9 +462,16 @@ export interface ScheduleMessage {
 }
 
 export type ServerMessage =
+  | YouMessage
+  | SignalMessage
   | StateMessage
   | AirMessage
   | ScheduleMessage
+  | MicMessage
+  | FloorMessage
+  | CoHostMessage
+  | TransitionMessage
+  | HandsMessage
   | QueueMessage
   | PresenceMessage
   | ChatMessagesMessage
@@ -281,11 +506,40 @@ export interface WishMessage {
   text: string
 }
 
+/**
+ * "I'd like to say something", and the two answers to being taken up on it.
+ *
+ * On the socket rather than over HTTP, alongside `say` and `wish`, because a
+ * listener has no credentials and this is the only channel they have. The
+ * console's half of the same conversation goes to `/api/floor`, where the admin
+ * gate is.
+ *
+ * `lower` does three jobs — withdraw a hand, decline an invitation, come down
+ * off the mic — because they are one intent, and which of the three it is
+ * depends only on state the station already holds.
+ */
+export interface HandMessage {
+  type: 'hand'
+  action: 'raise' | 'lower' | 'accept'
+}
+
+/**
+ * "Pass this to that socket." The only frame the station carries rather than
+ * acts on: it has no opinion about SDP, only about who may address whom.
+ */
+export interface SignalClientMessage {
+  type: 'signal'
+  to: number
+  payload: unknown
+}
+
 export type ClientMessage =
   | PingMessage
   | JoinMessage
   | SayMessage
   | WishMessage
+  | HandMessage
+  | SignalClientMessage
 
 export const audioUrl = (track: Track) => `/api/audio/${track.filename}`
 export const artworkUrl = (track: Track) =>

@@ -1,9 +1,14 @@
 import type {
   AirSnapshot,
+  CoHostSnapshot,
+  FloorSnapshot,
+  MicSnapshot,
   PlaybackSnapshot,
   QueueEntry,
   ScheduledSession,
+  SessionKind,
   Track,
+  TransitionSnapshot,
   Wish,
   WishStatus,
 } from './protocol.js'
@@ -17,6 +22,41 @@ export const ADMIN_HASH = '#admin'
  * station would refuse it rather than sending a request that comes back 400.
  */
 export const MAX_PADDING = 9_999
+
+/**
+ * The quietest the music may be ducked to. Mirrors `MIN_DUCK` in
+ * `server/src/mic.ts`; keep the two in step. Held here so the fader stops where
+ * the station would refuse it rather than sending a request that comes back 400.
+ */
+export const MIN_DUCK = 0.05
+
+/**
+ * The longest a session title may be. Mirrors `TITLE_MAX_LENGTH` in
+ * `server/src/routes/schedule.ts`; keep the two in step.
+ *
+ * Held here so the field stops where the station would cut, rather than
+ * accepting a sentence and quietly announcing the first eighty characters of
+ * it. The server still cuts: this is the field being honest, not the rule.
+ */
+export const SCHEDULE_TITLE_MAX_LENGTH = 80
+
+/**
+ * How often an open mic is renewed, against the station's ten-second lease.
+ *
+ * Comfortably inside it: two renewals can be lost to a bad connection and the
+ * mic still does not cut out mid-sentence, which is the only failure this pace
+ * is trying to buy off.
+ */
+export const MIC_RENEW_MS = 3_000
+
+/**
+ * How long the mic stays open after the talk key comes up.
+ *
+ * Without it the music swells back between words, which sounds like the station
+ * fighting you. Long enough to bridge a breath, short enough that the bed is
+ * back before the next line of the song matters.
+ */
+export const MIC_HANGOVER_MS = 400
 
 export function isAdminRoute(location: { pathname: string; hash: string }): boolean {
   return location.hash === ADMIN_HASH || location.pathname === '/admin'
@@ -191,9 +231,19 @@ export class AdminApi {
    * is already up, so changing the hour does not mean finding the image again;
    * see the route, which is where that rule actually lives.
    */
-  async announce(startsAt: number, poster?: File | null): Promise<ScheduledSession | null> {
+  async announce(
+    startsAt: number,
+    poster?: File | null,
+    said: { kind?: SessionKind; title?: string | null } = {},
+  ): Promise<ScheduledSession | null> {
     const body = new FormData()
     body.append('startsAt', String(startsAt))
+    // Always sent, both of them, including when they are empty. Unlike the
+    // poster these are not kept across an edit (see the route) so a form that
+    // left them out would be announcing a set with no title every time somebody
+    // moved the hour of a conversation.
+    body.append('kind', said.kind ?? 'set')
+    body.append('title', said.title ?? '')
     if (poster) body.append('poster', poster, poster.name)
 
     const response = await this.#request('PUT', '/api/schedule', { body })
@@ -275,9 +325,108 @@ export class AdminApi {
    * Both are idempotent at the station, so a double-click is not an error and
    * this needs no guard of its own. Ending a session clears the decks and the
    * queue and closes the room. See `OnAir` on the server.
+   *
+   * `kind` is what sort of night is starting and is only read on `start`: a
+   * session's kind is fixed when it opens, because changing it halfway would
+   * rewrite what the room was told when they walked in. Omitted means a set,
+   * which is what every caller meant before there were two kinds.
    */
-  session(action: 'start' | 'end'): Promise<AirSnapshot> {
-    return this.#json<AirSnapshot>('POST', '/api/session', { action })
+  session(action: 'start' | 'end', kind?: SessionKind): Promise<AirSnapshot> {
+    return this.#json<AirSnapshot>('POST', '/api/session', { action, ...(kind ? { kind } : {}) })
+  }
+
+  /**
+   * Whether somebody is talking over the music. Open, like `/api/session`, and
+   * for the same reason: it is not a secret, and the socket volunteers it a
+   * moment later anyway. Changing it is what needs the password.
+   */
+  micState(): Promise<MicSnapshot> {
+    return this.#json<MicSnapshot>('GET', '/api/mic')
+  }
+
+  /**
+   * Open the mic, keep it open, or shut it.
+   *
+   * `renew` is deliberately its own verb rather than a repeated `open`: the
+   * console beats on a timer while the key is held, and a keep-alive still in
+   * flight when it was released would otherwise put the station back on mic
+   * behind whoever just stopped talking.
+   *
+   * Every one of them answers with the snapshot it produced, which is what the
+   * card folds straight in: a talk button that waited for the broadcast would
+   * duck the music after you had already started.
+   */
+  mic(action: 'open' | 'renew' | 'close'): Promise<MicSnapshot> {
+    return this.#json<MicSnapshot>('POST', '/api/mic', { action })
+  }
+
+  /**
+   * How far the music drops while the mic is open, as a linear gain.
+   *
+   * Where the fader now stands rather than a step, like the padding and a mute,
+   * so a drag that lost its answer cannot walk the music down on retry. Clamped
+   * at the station, which is why the answer is worth reading back.
+   */
+  duck(duckTo: number): Promise<MicSnapshot> {
+    return this.#json<MicSnapshot>('POST', '/api/mic', { action: 'duck', duckTo })
+  }
+
+  /**
+   * Bringing a listener up, and taking the mic back.
+   *
+   * Only two verbs, and there is deliberately no third for putting somebody on
+   * air who did not ask: the station refuses an id with no hand raised, which
+   * is what makes an invitation a reply rather than a summons.
+   *
+   * The other half of this conversation — the hand going up, the invitation
+   * being accepted or declined — travels the other way on the socket, because
+   * a listener has nothing to authenticate with. See `HandMessage`.
+   */
+  floor(action: 'invite', listener: number): Promise<FloorSnapshot>
+  floor(action: 'drop'): Promise<FloorSnapshot>
+  floor(action: 'invite' | 'drop', listener?: number): Promise<FloorSnapshot> {
+    return this.#json<FloorSnapshot>('POST', '/api/floor', { action, listener })
+  }
+
+  /**
+   * The co-host key, so the console can build a link to send.
+   *
+   * Admin-only at the station, and that is the whole policy: a co-host's own
+   * browser cannot rebuild the link — the cookie is HttpOnly and the key came
+   * out of the address bar on arrival — so the only way to be given the seat is
+   * for the person with the password to hand it over. A co-host who could read
+   * this could quietly recruit a third.
+   */
+  async coHostKey(): Promise<{ key: string }> {
+    return this.#json<{ key: string }>('GET', '/api/cohost/key')
+  }
+
+  /**
+   * Take the seat back, from whoever is in it.
+   *
+   * Names nobody, because there is only ever one of them and because this is
+   * one button in a hurry. The co-host's own half of the same conversation —
+   * sitting down, keeping the seat, standing up — goes through `CoHostApi`,
+   * where their credential is.
+   */
+  async dropCoHost(): Promise<CoHostSnapshot> {
+    return this.#json<CoHostSnapshot>('POST', '/api/cohost/seat', { action: 'leave' })
+  }
+
+  /**
+   * How long one record overlaps the next, in ms. Zero is a hard cut.
+   *
+   * Where the fader now stands rather than a step, like the duck and the
+   * padding, so a slider that lost its answer cannot walk the crossfade out on
+   * retry. Clamped at the station, which is why the answer is worth reading back.
+   */
+  async blend(blendMs: number): Promise<TransitionSnapshot> {
+    // Rounded here rather than left to the schema: a slider reporting
+    // 3000.0000000004 gets a 400 for being a number the station calls not an
+    // integer, which is a refusal nobody could act on.
+    return this.#json<TransitionSnapshot>('POST', '/api/transition', {
+      blendMs: Math.round(blendMs),
+    })
   }
 
   async queue(): Promise<QueueEntry[]> {

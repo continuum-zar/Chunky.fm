@@ -38,12 +38,22 @@ restart_station() {
   ( cd "$SERVER_DIR" \
       && PORT=$PORT ADMIN_PASSWORD="$ADMIN_PASSWORD" AUDIO_STORAGE_DIR="${AUDIO_STORAGE_DIR:-$SERVER_DIR/audio_storage}" \
          nohup node dist/index.js >/dev/null 2>&1 & )
-  for _ in $(seq 1 20); do sleep 0.5; up && return 0; done
+  for _ in $(seq 1 20); do sleep 0.5; up || continue
+    # On air, because a station is off by default: going live the instant it
+    # was deployed would put every restart on air with an empty queue. Every
+    # script below assumes a broadcast is happening — the chat, the wish book
+    # and the mic are all refused without a session to belong to.
+    curl -s -o /dev/null -X POST -H "authorization: Bearer $ADMIN_PASSWORD" \
+      -H 'content-type: application/json' -d '{"action":"start"}' \
+      "$API_URL/api/session"
+    return 0
+  done
   return 1
 }
 
 SCRIPTS=(
-  qa:playback qa:admin qa:chat qa:chat-refusal qa:wishes
+  qa:playback qa:transition qa:admin qa:mic qa:soundcheck qa:voice qa:callin qa:cohost
+  qa:chat qa:chat-refusal qa:wishes
   qa:history qa:presence qa:reconnect qa:offline verify:sync
 )
 
@@ -53,7 +63,9 @@ for script in "${SCRIPTS[@]}"; do
   restart_station || { printf 'SETUP-FAIL  %-18s no station on %s\n' "$script" "$API_URL"; failures=$((failures + 1)); continue; }
 
   # The only one that does not put a track on for itself: it is measuring two
-  # listeners against a song that is already playing.
+  # listeners against a song that is already playing. (qa:transition and
+  # qa:cohost both queue a second record behind the first, since a transition
+  # needs something to transition into; they do that themselves.)
   if [ "$script" = "verify:sync" ]; then
     curl -s -o /dev/null -X POST -H "authorization: Bearer $ADMIN_PASSWORD" \
       -H 'content-type: application/json' -d "{\"action\":\"play\",\"trackId\":$TRACK_ID}" \

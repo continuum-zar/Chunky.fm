@@ -65,7 +65,11 @@ async function join(browser: Browser, nickname: string): Promise<Page> {
   // A context each: separate localStorage, separate sockets: as many listeners
   // as far as the station is concerned.
   const page = await (await browser.newContext()).newPage()
-  await page.goto(STATION_URL, { waitUntil: 'domcontentloaded' })
+  // At `#chat`, which is where the roster is. Who else is here belongs to the
+  // room rather than to the record, and the landing view is the record and the
+  // words to it alone. The join form renders whatever the address says, so
+  // tuning in from here lands straight on the room.
+  await page.goto(`${STATION_URL}#chat`, { waitUntil: 'domcontentloaded' })
   await tuneIn(page, nickname)
   console.log(`${nickname}: tuned in`)
   return page
@@ -107,7 +111,7 @@ try {
   // A tab that opens the page but never tunes in holds a socket open and is
   // still not a listener: the roster is who named themselves, not who connected.
   const lurker = await (await browser.newContext()).newPage()
-  await lurker.goto(STATION_URL, { waitUntil: 'domcontentloaded' })
+  await lurker.goto(`${STATION_URL}#chat`, { waitUntil: 'domcontentloaded' })
   await wait(1_000)
   await expectRoster(ana, 'ana with a lurker connected', ['ana', 'ben', 'cleo'])
   await lurker.close()
