@@ -103,40 +103,58 @@ interface BroadcastOptions {
   /** What to send the room. Null while there is nothing to send, which is also "no peers". */
   track: MediaStreamTrack | null
   /**
-   * What to send whoever is up: the room bus, minus themselves.
+   * What to send one particular voice: the room bus, minus themselves.
    *
-   * The whole feature is this being a different track from the one above. Send
-   * a guest the room bus and they hear their own voice about six hundred
-   * milliseconds after they said it, which is not a cosmetic problem — delayed
-   * feedback at that interval is used deliberately to disrupt fluency, and the
-   * person it happens to will stop mid-sentence and assume the station broke.
+   * The whole feature is this being a different track from the one above, and a
+   * different one *per voice*. Send somebody the room bus and they hear their
+   * own voice about six hundred milliseconds after they said it, which is not a
+   * cosmetic problem — delayed feedback at that interval is used deliberately to
+   * disrupt fluency, and the person it happens to will stop mid-sentence and
+   * assume the station broke.
+   *
+   * A function rather than a track, because there can be two people up — a
+   * co-host and a caller — and one shared minus-bus would leave each of them
+   * unable to hear the other. See `airMixer.seatTrack`.
    */
-  guestTrack: MediaStreamTrack | null
+  seatTrack(id: number): MediaStreamTrack | null
   /** Who to send it to: the roster, minus this console. */
   targets: number[]
   iceServers: RTCIceServer[] | null
   /**
-   * Whoever has the floor, or null. The second connection to exactly one of the
-   * targets, going the other way.
+   * Everybody who should be sending a voice *up* to this console.
+   *
+   * Was one id, and is a list because there can now be two kinds of them at
+   * once: whoever has the floor, and whoever is in the co-host seat. The two
+   * arrive by completely different routes — one was invited after asking, one
+   * seated themselves holding a key — and from here they are the same thing: a
+   * second connection to one of the targets, going the other way.
    */
-  speaker: number | null
-  /** A guest's voice, once one is arriving. Null takes it away again. */
-  onGuest(stream: MediaStream | null): void
+  voices: number[]
+  /** One voice, once it is arriving. Null takes it away again. */
+  onVoice(id: number, stream: MediaStream | null): void
   /**
-   * Put the guest on the air, or take them off, as a linear gain.
+   * Put one voice on the air, or take it off, as a linear gain.
    *
    * Called by this hook rather than by the console, because the *order* matters
    * more than the value and only this knows when the swap happened. See the
    * talk-channel effect.
    */
-  onAir(level: number): void
+  onAir(id: number, level: number): void
 }
 
 export interface VoiceBroadcast {
   handleMessage(message: ServerMessage): void
   peers: PeerState[]
-  /** How the connection carrying the guest's voice is doing, if there is one. */
-  guest: PeerHealth | null
+  /**
+   * How each inbound connection is doing, by the id it is with.
+   *
+   * A map rather than one value, because there can be two of them and they fail
+   * independently — which is the point of keeping them apart. "The co-host
+   * cannot be heard" and "the caller cannot be heard" have different causes and
+   * different fixes, and a console that showed one number for both would be
+   * telling whoever is reading it to look in the wrong place half the time.
+   */
+  voices: Map<number, PeerHealth>
 }
 
 /**
@@ -155,49 +173,48 @@ export function useVoiceBroadcast({
   connection,
   me,
   track,
-  guestTrack,
+  seatTrack,
   targets,
   iceServers,
-  speaker,
-  onGuest,
+  voices,
+  onVoice,
   onAir,
 }: BroadcastOptions): VoiceBroadcast {
   const links = useRef(new Map<number, PeerLink>())
   /**
-   * The one connection that goes the other way.
+   * The connections that go the other way, by the id they are with.
    *
    * Kept apart from `links` rather than in it under a compound key, because it
    * is not the same kind of thing: `links` is a fan-out that follows the roster
-   * and this is a single connection that follows the floor. Sharing a map would
-   * have the roster diff tearing down a guest's microphone every time somebody
-   * else left the room.
+   * and these follow who is up. Sharing a map would have the roster diff
+   * tearing down somebody's microphone every time a listener left the room.
    */
-  const talk = useRef<{ id: number; link: PeerLink } | null>(null)
-  const [guest, setGuest] = useState<PeerHealth | null>(null)
+  const talk = useRef(new Map<number, PeerLink>())
+  const [health, setHealth] = useState(new Map<number, PeerHealth>())
   /**
-   * How many times this call's microphone has been rebuilt, and whether one is
-   * waiting out its delay.
+   * How many times each inbound connection has been rebuilt, and which are
+   * waiting out a delay.
    *
-   * Its own counter rather than a row in `attempts`, because it counts a
-   * different thing: that map is about reaching a listener, and this is about
-   * hearing one. A guest whose downlink was rebuilt twice has used none of the
+   * Their own counters rather than rows in `attempts`, because they count a
+   * different thing: that map is about reaching a listener, and these are about
+   * hearing one. Somebody whose downlink was rebuilt twice has used none of the
    * patience owed to their uplink, and reading one number for both would give
-   * up on a call for a reason that had nothing to do with it.
+   * up on a voice for a reason that had nothing to do with it.
    */
-  const talkAttempts = useRef(0)
-  const talkRetrying = useRef(false)
+  const talkAttempts = useRef(new Map<number, number>())
+  const talkRetrying = useRef(new Set<number>())
   const [talkTick, setTalkTick] = useState(0)
-  // Read through a ref so the effect below is not rebuilt — and the guest's
-  // connection not torn down — every time the console re-renders.
-  const guestStream = useRef(onGuest)
-  guestStream.current = onGuest
+  // Read through a ref so the effect below is not rebuilt — and the voices'
+  // connections not torn down — every time the console re-renders.
+  const heard = useRef(onVoice)
+  heard.current = onVoice
   const fader = useRef(onAir)
   fader.current = onAir
-  // The two buses, read inside the effects rather than listed as dependencies:
-  // they are stable for the life of the mixer, and a track identity that
-  // changed would tear down every connection in the room.
-  const buses = useRef({ track, guestTrack })
-  buses.current = { track, guestTrack }
+  // The buses, read inside the effects rather than listed as dependencies: they
+  // are stable for the life of the mixer, and a track identity that changed
+  // would tear down every connection in the room.
+  const buses = useRef({ track, seatTrack })
+  buses.current = { track, seatTrack }
   const attempts = useRef(new Map<number, number>())
   const retries = useRef(new Set<number>())
   const [peers, setPeers] = useState<PeerState[]>([])
@@ -213,6 +230,16 @@ export function useVoiceBroadcast({
       // closed is a listener who left, and the roster beside this already says
       // who is here.
       return state === 'closed' ? next : [...next, { id, state }].sort((a, b) => a.id - b.id)
+    })
+  }, [])
+
+  /** Where one inbound connection stands, or nothing when it has gone. */
+  const noteVoice = useCallback((id: number, state: PeerHealth | null) => {
+    setHealth((current) => {
+      const next = new Map(current)
+      if (state === null) next.delete(id)
+      else next.set(id, state)
+      return next
     })
   }, [])
 
@@ -253,7 +280,7 @@ export function useVoiceBroadcast({
   )
 
   /**
-   * Build the guest's microphone again, a bounded number of times.
+   * Build one voice's microphone again, a bounded number of times.
    *
    * The same ladder the room's connections climb, and for the same reason: ICE
    * fails both for things that pass — a network changing under a laptop, a
@@ -262,33 +289,42 @@ export function useVoiceBroadcast({
    * never reachable.
    *
    * What is different is what a failure *means* here. A listener who cannot be
-   * reached misses a mic break. A guest who cannot be reached is on air, in
-   * front of a room that has ducked for them, saying things nobody can hear —
-   * so the end of this ladder is not silence but a word on the console, and the
-   * decision to stand them down stays with the person who can see it.
+   * reached misses a mic break. Somebody who cannot be reached on this channel
+   * is on air, in front of a room that has ducked for them, saying things
+   * nobody can hear — so the end of this ladder is not silence but a word on
+   * the console, and the decision to stand them down stays with the person who
+   * can see it.
    */
-  const retryTalk = useCallback((id: number) => {
-    if (talkRetrying.current) return
-    if (talkAttempts.current >= MAX_VOICE_ATTEMPTS) {
-      setGuest('unreachable')
-      return
-    }
-    talkAttempts.current += 1
-    talkRetrying.current = true
-    setGuest('retrying')
-    window.setTimeout(() => {
-      talkRetrying.current = false
-      const open = talk.current
-      if (open?.id !== id) return
-      open.link.close()
-      talk.current = null
-      setTalkTick((tick) => tick + 1)
-    }, RETRY_DELAY_MS)
-  }, [])
+  const retryTalk = useCallback(
+    (id: number) => {
+      if (talkRetrying.current.has(id)) return
+      const tried = talkAttempts.current.get(id) ?? 0
+      if (tried >= MAX_VOICE_ATTEMPTS) {
+        noteVoice(id, 'unreachable')
+        return
+      }
+      talkAttempts.current.set(id, tried + 1)
+      talkRetrying.current.add(id)
+      noteVoice(id, 'retrying')
+      window.setTimeout(() => {
+        talkRetrying.current.delete(id)
+        const open = talk.current.get(id)
+        if (!open) return
+        open.close()
+        talk.current.delete(id)
+        setTalkTick((tick) => tick + 1)
+      }, RETRY_DELAY_MS)
+    },
+    [noteVoice],
+  )
 
   // Deliberately not `targets` itself: a new array every render would tear down
   // every connection on every render. What matters is which ids are in it.
   const wanted = targets.join(',')
+  // The same trick for the other list, and it matters more here: this one is
+  // usually empty and briefly one or two, so an identity that changed every
+  // render would renegotiate a live microphone constantly.
+  const up = [...voices].sort((a, b) => a - b).join(',')
 
   useEffect(() => {
     const open = links.current
@@ -306,6 +342,7 @@ export function useVoiceBroadcast({
 
     const ids = wanted === '' ? [] : wanted.split(',').map(Number)
     const live = new Set(ids)
+    const talking = new Set(up === '' ? [] : up.split(',').map(Number))
 
     // Gone: a listener who closed the tab. Their connection is already dead in
     // every way that matters; this is what stops it being remembered.
@@ -327,11 +364,11 @@ export function useVoiceBroadcast({
       note(id, 'new')
       open.set(
         id,
-        // Whoever holds the floor gets the bus that does not carry them. This
-        // covers the listener who is *already* up when their connection is
-        // built — a reconnect, or somebody the console retried — where there is
-        // no swap to make because there was nothing there to swap.
-        offerVoice(id === speaker ? (buses.current.guestTrack ?? track) : track, {
+        // Anybody who is up gets the bus that does not carry them. This covers
+        // somebody who is *already* up when their connection is built — a
+        // reconnect, or one the console retried — where there is no swap to
+        // make because there was nothing there to swap.
+        offerVoice(talking.has(id) ? (buses.current.seatTrack(id) ?? track) : track, {
           iceServers,
           label: `to listener ${id}`,
           send: (payload) => connection.send({ type: 'signal', to: id, payload }),
@@ -342,7 +379,7 @@ export function useVoiceBroadcast({
         }),
       )
     }
-  }, [connection, track, iceServers, me, wanted, retryTick, speaker, note, retry])
+  }, [connection, track, iceServers, me, wanted, retryTick, up, note, retry])
 
   // Leaving the console, or closing the mic, takes every connection with it.
   useEffect(() => {
@@ -354,85 +391,90 @@ export function useVoiceBroadcast({
   }, [])
 
   /**
-   * The talk channel: one connection, to whoever has the floor.
+   * The talk channels: one connection per voice that is up.
    *
-   * Deliberately independent of the fan-out above. A guest's microphone must
-   * not be renegotiated because somebody else joined the room, and their
-   * downlink must not be disturbed because their uplink failed — those are two
-   * failures with different causes, and the console's job is to tell them
-   * apart rather than to bundle them.
+   * Deliberately independent of the fan-out above. Somebody's microphone must
+   * not be renegotiated because a listener joined the room, and their downlink
+   * must not be disturbed because their uplink failed — those are failures with
+   * different causes, and the console's job is to tell them apart rather than
+   * to bundle them.
    */
   useEffect(() => {
     const open = talk.current
-    const wanted = connection && iceServers !== null && speaker !== null && speaker !== me
+    const ready = connection && iceServers !== null
+    const ids = new Set(
+      ready ? (up === '' ? [] : up.split(',').map(Number)).filter((id) => id !== me) : [],
+    )
 
-    // A different caller, or none, is a clean slate: whatever could not be
-    // reached ten minutes ago has no bearing on whoever is up now.
-    if (!wanted || open?.id !== speaker) {
-      if (talkAttempts.current !== 0 && open?.id !== speaker) talkAttempts.current = 0
+    // Coming down, and the order is the reverse of going up for the same
+    // reason. Off the air first, so nothing of theirs is still reaching the
+    // room while the rest of this happens; then the voice away; and only then
+    // their own connection back onto the bus that carries the room, which is
+    // now a room they are no longer on.
+    for (const [id, link] of open) {
+      if (ids.has(id)) continue
+      fader.current(id, 0)
+      link.close()
+      open.delete(id)
+      noteVoice(id, null)
+      heard.current(id, null)
+      // A clean slate for next time: whatever could not be reached ten minutes
+      // ago has no bearing on somebody coming up now.
+      talkAttempts.current.delete(id)
+      links.current.get(id)?.replace(buses.current.track)
     }
 
-    if (open && (!wanted || open.id !== speaker)) {
-      // Coming down, and the order is the reverse of going up for the same
-      // reason. Off the air first, so nothing of theirs is still reaching the
-      // room while the rest of this happens; then the voice away; and only then
-      // their own connection back onto the bus that carries the room, which is
-      // now a room they are no longer on.
-      fader.current(0)
-      open.link.close()
-      talk.current = null
-      setGuest(null)
-      guestStream.current(null)
-      links.current.get(open.id)?.replace(buses.current.track)
-    }
-    // A rebuild waiting out its delay is deliberately not built here: it has no
-    // link, and making one now would skip the wait.
-    if (!wanted || talk.current || talkRetrying.current) return
+    if (!ready) return
 
-    const id = speaker as number
-    // **Before anything of theirs can reach the room.** This is the whole
-    // milestone in one line and one ordering: swap their downlink onto the bus
-    // that does not carry them, and only then let them onto the one that does.
-    // The other way round leaves a window — short, and a whole syllable long —
-    // in which a guest is on the room bus and still receiving it, which is the
-    // delayed-sidetone failure this entire design exists to avoid.
-    links.current.get(id)?.replace(buses.current.guestTrack)
-    setGuest('new')
-    talk.current = {
-      id,
-      link: inviteVoice({
-        iceServers,
-        channel: 'talk',
-        label: `from listener ${id}`,
-        send: (payload) => connection.send({ type: 'signal', to: id, payload }),
-        onStream: (stream) => {
-          guestStream.current(stream)
-          // On the air only once there is a voice to put there, which is also
-          // safely after the swap above: the connection was built before this
-          // could fire.
-          fader.current(1)
-        },
-        onState: (state) => {
-          setGuest(state)
-          // `disconnected` is often a blip ICE recovers from on its own, so
-          // only the states it does not come back from take the voice away.
-          if (state === 'failed' || state === 'closed') {
-            fader.current(0)
-            guestStream.current(null)
-          }
-          if (state === 'failed') retryTalk(id)
-        },
-      }),
-    }
-  }, [connection, iceServers, speaker, me, talkTick, retryTalk])
+    for (const id of ids) {
+      // A rebuild waiting out its delay is deliberately not built here: it has
+      // no link, and making one now would skip the wait.
+      if (open.has(id) || talkRetrying.current.has(id)) continue
 
-  // Leaving the console takes the guest's connection with it, as it does the
-  // room's. Its own effect because it must not run on a speaker changing.
+      // **Before anything of theirs can reach the room.** This is the whole
+      // milestone in one line and one ordering: swap their downlink onto the
+      // bus that does not carry them, and only then let them onto the one that
+      // does. The other way round leaves a window — short, and a whole syllable
+      // long — in which somebody is on the room bus and still receiving it,
+      // which is the delayed-sidetone failure this design exists to avoid.
+      links.current.get(id)?.replace(buses.current.seatTrack(id))
+      noteVoice(id, 'new')
+      open.set(
+        id,
+        inviteVoice({
+          iceServers,
+          channel: 'talk',
+          label: `from listener ${id}`,
+          send: (payload) => connection.send({ type: 'signal', to: id, payload }),
+          onStream: (stream) => {
+            heard.current(id, stream)
+            // On the air only once there is a voice to put there, which is also
+            // safely after the swap above: the connection was built before this
+            // could fire.
+            fader.current(id, 1)
+          },
+          onState: (state) => {
+            noteVoice(id, state)
+            // `disconnected` is often a blip ICE recovers from on its own, so
+            // only the states it does not come back from take the voice away.
+            if (state === 'failed' || state === 'closed') {
+              fader.current(id, 0)
+              heard.current(id, null)
+            }
+            if (state === 'failed') retryTalk(id)
+          },
+        }),
+      )
+    }
+  }, [connection, iceServers, up, me, talkTick, noteVoice, retryTalk])
+
+  // Leaving the console takes the inbound connections with it, as it does the
+  // room's. Its own effect because it must not run on who is up changing.
   useEffect(() => {
     const open = talk
     return () => {
-      open.current?.link.close()
-      open.current = null
+      for (const link of open.current.values()) link.close()
+      open.current.clear()
     }
   }, [])
 
@@ -445,13 +487,13 @@ export function useVoiceBroadcast({
     // business accepting. The station refuses to relay one too; see `signal`.
     if (message.payload.kind === 'offer') return
     if (channelOf(message.payload) === 'talk') {
-      if (talk.current?.id === message.from) void talk.current.link.accept(message.payload)
+      void talk.current.get(message.from)?.accept(message.payload)
       return
     }
     void links.current.get(message.from)?.accept(message.payload)
   }, [])
 
-  return { handleMessage, peers, guest }
+  return { handleMessage, peers, voices: health }
 }
 
 interface ReceiverOptions {

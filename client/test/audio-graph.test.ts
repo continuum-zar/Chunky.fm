@@ -33,6 +33,11 @@ class FakeParam {
   setTargetAtTime(target: number, when: number, constant: number): void {
     this.calls.push(['target', target, when, constant])
   }
+
+  linearRampToValueAtTime(value: number, when: number): void {
+    this.calls.push(['ramp', value, when])
+    this.value = value
+  }
 }
 
 class FakeGain {
@@ -147,19 +152,43 @@ afterEach(() => {
 const lastTarget = (gain: FakeGain): Call | undefined =>
   [...gain.gain.calls].reverse().find((call) => call[0] === 'target')
 
+/**
+ * The last linear ramp, which is where a *deck* fader shows up.
+ *
+ * A different automation from the one above, and deliberately: the decks move
+ * on linear ramps because they are the crossfade, and `setTargetAtTime` is only
+ * ever a hand on a fader. That split is what lets an instrument outside the
+ * graph measure a duck without also measuring every transition; see
+ * `DECK_SETTLE_S`.
+ */
+const lastRamp = (gain: FakeGain): Call | undefined =>
+  [...gain.gain.calls].reverse().find((call) => call[0] === 'ramp')
+
 describe('stationAudio', () => {
-  it('routes the element through two gain stages on the way to the speakers', () => {
+  it('routes each element through its own fader, then the duck, then the mute', () => {
+    const audio = element()
+    const second = element()
+    stationAudio(audio, second)
+
+    const context = FakeContext.built[0]!
+    expect(context.sources).toBe(2)
+    // Five, and no two of them are the same control: the duck, the mute, this
+    // listener's own music fader, and one per deck. See the diagram at the top
+    // of `audio-graph.ts` for why none of them can be folded into another.
+    expect(context.gains).toHaveLength(5)
+    for (const gain of context.gains) expect(gain.connected).toBe(1)
+  })
+
+  it('runs on one deck, and cuts rather than blending', () => {
     const audio = element()
     stationAudio(audio)
 
     const context = FakeContext.built[0]!
     expect(context.sources).toBe(1)
-    // The duck and the mute. They are separate because they answer to different
-    // people: the station decides where the music sits under a voice, and this
-    // listener decides whether any of it comes out at all.
-    expect(context.gains).toHaveLength(2)
-    expect(context.gains[0]!.connected).toBe(1)
-    expect(context.gains[1]!.connected).toBe(1)
+    // The duck, the mute, the music fader, and one deck. A page that only ever
+    // hands over one element gets a station that cuts, which is the honest
+    // degradation.
+    expect(context.gains).toHaveLength(4)
   })
 
   it('wakes the context, because a suspended one is silence rather than quiet', () => {
@@ -336,5 +365,127 @@ describe('stationAudio', () => {
     stationAudio(audio)
 
     expect(FakeContext.built).toHaveLength(2)
+  })
+})
+
+describe('stationAudio crossfades', () => {
+  /**
+   * The two deck faders.
+   *
+   * By position, after the three that are built first — the duck, the mute and
+   * the music fader — because they are made in a fixed order and there is
+   * nothing else to tell them apart by on a fake this small.
+   */
+  function decks() {
+    const gains = FakeContext.built[0]!.gains
+    return { a: gains[3]!, b: gains[4]! }
+  }
+
+  it('comes up on one deck, so a station playing one record plays it once', () => {
+    stationAudio(element(), element())
+    // A pair that both started open would be the same record twice for anybody
+    // whose second element happened to be loaded.
+    expect(decks().a.gain.value).toBe(1)
+    expect(decks().b.gain.value).toBe(0)
+  })
+
+  it('walks one deck up and the other down across the window', () => {
+    const stage = stationAudio(element(), element())
+    stage.blend({ incoming: 'b', startsIn: 0, endsIn: 4 })
+
+    const ramps = (gain: { gain: { calls: Call[] } }) =>
+      gain.gain.calls.filter((call) => call[0] === 'ramp')
+
+    // Both are drawn as segments rather than one straight line, because a
+    // linear crossfade between two unrelated records dips audibly in the middle
+    // — two uncorrelated signals at half amplitude sum to about 0.7 of one.
+    expect(ramps(decks().b).length).toBeGreaterThan(1)
+    expect(ramps(decks().a).length).toBeGreaterThan(1)
+
+    expect(ramps(decks().b).at(-1)).toEqual(['ramp', expect.closeTo(1, 5), 4])
+    expect(ramps(decks().a).at(-1)).toEqual(['ramp', expect.closeTo(0, 5), 4])
+  })
+
+  it('holds equal power through the middle rather than dipping', () => {
+    const stage = stationAudio(element(), element())
+    stage.blend({ incoming: 'b', startsIn: 0, endsIn: 4 })
+
+    const at = (gain: { gain: { calls: Call[] } }, when: number) =>
+      gain.gain.calls.find((call) => call[0] === 'ramp' && call[2] === when)![1]!
+
+    // Halfway, both faders sit at about 0.707 — which sums to one, not to the
+    // 0.5 a straight line would give. This is the whole reason for the curve.
+    expect(at(decks().b, 2)).toBeCloseTo(Math.SQRT1_2, 3)
+    expect(at(decks().a, 2)).toBeCloseTo(Math.SQRT1_2, 3)
+  })
+
+  it('picks up a fade already underway from where it should be, not from zero', () => {
+    const stage = stationAudio(element(), element())
+    // A listener who arrived three quarters of the way through a transition.
+    stage.blend({ incoming: 'b', startsIn: -3, endsIn: 1 })
+
+    const first = decks().b.gain.calls.find((call) => call[0] === 'set')!
+    // Not silence: they should come in hearing the incoming record almost fully
+    // up, and finish the last second of the fade in step with everybody else.
+    expect(first[1]).toBeCloseTo(Math.sin((0.75 * Math.PI) / 2), 3)
+  })
+
+  it('is a cut when the window has no length', () => {
+    const stage = stationAudio(element(), element())
+    stage.blend({ incoming: 'b', startsIn: 0, endsIn: 0 })
+
+    expect(decks().b.gain.value).toBe(1)
+    expect(decks().a.gain.value).toBe(0)
+  })
+
+  it('puts one deck up and the other away when there is nothing fading', () => {
+    const stage = stationAudio(element(), element())
+    stage.only('b')
+
+    expect(lastRamp(decks().b)?.[1]).toBe(1)
+    expect(lastRamp(decks().a)?.[1]).toBe(0)
+    // A ramp rather than a step, and rather than the duck's approach: quick
+    // enough not to be heard as a fade, slow enough not to click.
+    expect(lastRamp(decks().b)?.[2]).toBeGreaterThan(0)
+    // And never a `setTargetAtTime`, which is what the duck and the mute use
+    // and what an instrument outside the graph counts to measure one.
+    expect(lastTarget(decks().b)).toBeUndefined()
+  })
+
+  it('just puts the incoming deck up on a page with one element', () => {
+    const stage = stationAudio(element())
+    // No second deck to take down, and nothing to throw about: a one-deck
+    // station cuts, and `blend` is where that falls out rather than a branch
+    // every caller has to remember.
+    expect(() => stage.blend({ incoming: 'a', startsIn: 0, endsIn: 4 })).not.toThrow()
+    expect(lastRamp(FakeContext.built[0]!.gains[3]!)?.[1]).toBe(1)
+  })
+})
+
+describe('the music fader', () => {
+  it('sits on the music alone, under both of the other two', () => {
+    const stage = stationAudio(element(), element())
+    stage.music(0.4)
+
+    // Not the duck, which the station owns and would overwrite this on the next
+    // mic break; not the mute, which covers voices too and would turn down the
+    // person you are answering. Its own node, between the decks and the duck.
+    const music = FakeContext.built[0]!.gains[2]!
+    expect(lastTarget(music)).toEqual(['target', 0.4, 0, expect.any(Number)])
+
+    stage.duck(0.2)
+    // Untouched by a mic break: the two multiply rather than one replacing the
+    // other, which is the whole reason there are two of them.
+    expect(lastTarget(music)).toEqual(['target', 0.4, 0, expect.any(Number)])
+  })
+
+  it('ramps, and clamps, like every other fader here', () => {
+    const stage = stationAudio(element())
+    const music = FakeContext.built[0]!.gains[2]!
+
+    stage.music(4)
+    expect(lastTarget(music)![1]).toBe(1)
+    stage.music(-1)
+    expect(lastTarget(music)![1]).toBe(0)
   })
 })

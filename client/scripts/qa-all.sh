@@ -52,7 +52,8 @@ restart_station() {
 }
 
 SCRIPTS=(
-  qa:playback qa:admin qa:mic qa:soundcheck qa:voice qa:callin qa:chat qa:chat-refusal qa:wishes
+  qa:playback qa:transition qa:admin qa:mic qa:soundcheck qa:voice qa:callin qa:cohost
+  qa:chat qa:chat-refusal qa:wishes
   qa:history qa:presence qa:reconnect qa:offline verify:sync
 )
 
@@ -62,7 +63,9 @@ for script in "${SCRIPTS[@]}"; do
   restart_station || { printf 'SETUP-FAIL  %-18s no station on %s\n' "$script" "$API_URL"; failures=$((failures + 1)); continue; }
 
   # The only one that does not put a track on for itself: it is measuring two
-  # listeners against a song that is already playing.
+  # listeners against a song that is already playing. (qa:transition and
+  # qa:cohost both queue a second record behind the first, since a transition
+  # needs something to transition into; they do that themselves.)
   if [ "$script" = "verify:sync" ]; then
     curl -s -o /dev/null -X POST -H "authorization: Bearer $ADMIN_PASSWORD" \
       -H 'content-type: application/json' -d "{\"action\":\"play\",\"trackId\":$TRACK_ID}" \

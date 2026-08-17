@@ -14,6 +14,7 @@ import {
   airMessage,
   scheduleMessage,
   chatMessages,
+  coHostMessage,
   errorMessage,
   floorMessage,
   handsMessage,
@@ -25,11 +26,14 @@ import {
   youMessage,
   queueMessage,
   stateMessage,
+  transitionMessage,
   wishedMessage,
 } from './protocol.js'
+import type { CoHost, CoHostSnapshot } from './cohost.js'
 import type { QueueEntry } from './queue.js'
 import type { Schedule, ScheduledSession } from './schedule.js'
 import type { Station } from './station.js'
+import type { TransitionSnapshot } from './transition.js'
 import type { WishBook } from './wishes.js'
 
 export interface RealtimeLogger {
@@ -72,6 +76,14 @@ export interface RealtimeOptions {
    * description of the station before this existed.
    */
   floor?: Floor
+  /**
+   * Who is co-hosting. Optional like `floor`, and absent means a station with
+   * no seat: nothing is ever broadcast about one, and the console is never told
+   * an id to offer a second microphone to. The honest description of the
+   * station before this existed, and the right shape for every harness that is
+   * about something else.
+   */
+  coHost?: CoHost
   /** Who has been asked to stop talking. Omit and nobody is muted. */
   mutes?: Mutes
   /**
@@ -132,6 +144,21 @@ export interface RealtimeOptions {
    */
   isAdmin?(headers: IncomingHttpHeaders): boolean
   /**
+   * Which upgrades are holding a co-host key.
+   *
+   * The same shape as `isAdmin` above, asked once per connection for the same
+   * reason, and it buys as little: knowing that this socket *could* take the
+   * seat. It does not take it — that is a deliberate act over HTTP, because
+   * opening the page and going on air are two different decisions and only one
+   * of them should be made by loading a URL.
+   *
+   * What it is actually for is the refusal. A socket that never presented a
+   * co-host key must not be able to claim the seat by naming itself in a
+   * request, and this is the only place the station ever sees what that socket
+   * presented. See `mayTakeSeat`.
+   */
+  isCoHost?(headers: IncomingHttpHeaders): boolean
+  /**
    * The last socket that was the decks has closed.
    *
    * Wired to the mic's lease in `app.ts` rather than reached for from in here,
@@ -150,6 +177,21 @@ export interface RealtimeHandle {
   clientCount(): number
   /** Who has named themselves: a subset of the sockets `clientCount` counts. */
   listeners(): Listener[]
+  /**
+   * Did this socket present a co-host key on its way in, and is it still open?
+   *
+   * The seat is claimed over HTTP — see `routes/cohost.ts` — and a request
+   * naming a socket id is the only shape that claim can take, because the id is
+   * what the console has to offer a microphone to. Which means a browser
+   * holding nothing but a listener cookie could name somebody else's socket and
+   * put *them* in the seat, if nobody checked. This is the check, and it is
+   * here because the upgrade's headers are seen exactly once, in this file.
+   *
+   * Two facts in one answer on purpose: an id that was a co-host and has since
+   * closed is as unusable as one that never was, and a caller that had to ask
+   * twice would have a window between the two questions.
+   */
+  isCoHostSocket(id: number): boolean
   broadcast(message: ServerMessage): void
   close(): Promise<void>
 }
@@ -250,6 +292,9 @@ const SHUT: MicSnapshot = { live: false, duckTo: DEFAULT_DUCK, since: null }
 /** What a station with no `floor` reports: nobody up, nobody on their way up. */
 const EMPTY: FloorSnapshot = { speaker: null, invited: null }
 
+/** What a station with no `coHost` reports: an empty seat, permanently. */
+const NOBODY: CoHostSnapshot = { seat: null }
+
 /**
  * Attaches the station's websocket surface to an existing HTTP server.
  *
@@ -297,6 +342,8 @@ export function attachRealtime({
   handBurst = DEFAULT_HAND_BURST,
   handRefillMs = DEFAULT_HAND_REFILL_MS,
   isAdmin,
+  isCoHost,
+  coHost,
   onDecksGone,
   signalBurst = DEFAULT_SIGNAL_BURST,
   signalRefillMs = DEFAULT_SIGNAL_REFILL_MS,
@@ -310,6 +357,7 @@ export function attachRealtime({
   const airSnapshot = (): AirSnapshot => air?.snapshot() ?? ALWAYS_ON
   const micSnapshot = (): MicSnapshot => mic?.snapshot() ?? SHUT
   const floorSnapshot = (): FloorSnapshot => floor?.snapshot() ?? EMPTY
+  const coHostSnapshot = (): CoHostSnapshot => coHost?.snapshot() ?? NOBODY
   const wss = new WebSocketServer({
     server,
     path,
@@ -340,6 +388,20 @@ export function attachRealtime({
    */
   const socketsById = new Map<number, WebSocket>()
   const deckSockets = new Set<number>()
+  /**
+   * Which sockets came in holding a co-host key.
+   *
+   * Deliberately not "who is co-hosting" — that is `CoHost`, and it holds one
+   * id at a time. This is the set of sockets *entitled* to ask, which is a fact
+   * about connections rather than about the evening, and belongs beside
+   * `deckSockets` for exactly the reason that one is not the roster either.
+   *
+   * The decks are in it. Whoever holds the admin password can already do
+   * everything the seat can, so a console driving the co-host page for a
+   * soundcheck should not be refused by a rule written for somebody else. Same
+   * ladder as `hasCoHostCredentials`.
+   */
+  const coHostSockets = new Set<number>()
   // Set once shutdown starts, and read by the roster broadcast below.
   let draining = false
 
@@ -578,6 +640,10 @@ export function attachRealtime({
     // had already abandoned. Reads the roster back rather than trusting the
     // argument, because `Presence.join` is what decides what a name becomes.
     floor?.rename(listenerId, presence.nicknameOf(listenerId) ?? nickname)
+    // The seat follows the roster too, and for the same reason. A co-host is
+    // named on the air for the whole evening rather than for one break, so a
+    // stale name here is wrong for longer than anywhere else it could be.
+    coHost?.rename(listenerId, presence.nicknameOf(listenerId) ?? nickname)
     broadcastPresence()
   }
 
@@ -666,6 +732,12 @@ export function attachRealtime({
     // upgrade, and a socket does not get to change its mind about who it is
     // halfway through an evening.
     if (isAdmin?.(request.headers)) deckSockets.add(listenerId)
+    // Asked on the way in for the reason above it is: the co-host cookie was on
+    // the upgrade, and a socket does not get to acquire one later. A console is
+    // in here too — see `coHostSockets`.
+    if (isCoHost?.(request.headers) || deckSockets.has(listenerId)) {
+      coHostSockets.add(listenerId)
+    }
     // Per socket, not per listener: the thing being paced is a connection, and
     // a bucket that outlived one would have to be cleaned up after sockets that
     // never come back.
@@ -698,6 +770,15 @@ export function attachRealtime({
     // whose voice they are about to hear, rather than being told a frame later
     // that the quiet music has somebody talking over it.
     send(socket, floorMessage(floorSnapshot()))
+    // And who is co-hosting, in the same breath and for the same reason: a
+    // second voice on the air is a second name the room is owed before it
+    // arrives. Also how the co-host's own page finds out it still holds the
+    // seat after a reconnect, which it reads by matching the id against its own.
+    send(socket, coHostMessage(coHostSnapshot()))
+    // Before the music, because it changes how the music is played. A page told
+    // what is on without being told how long the next transition runs would run
+    // the first one of the evening as a cut.
+    send(socket, transitionMessage(station.transition.snapshot()))
     // Who has asked, but only to a console. A listener has no business knowing
     // this, and one that opened after three hands went up would otherwise start
     // empty and stay that way until somebody changed their mind.
@@ -750,6 +831,12 @@ export function attachRealtime({
       // floor holds *is* the socket. A guest who is merely reconnecting comes
       // back as a new id, which is a new listener, which is the honest reading.
       floor?.leave(listenerId)
+      // And the seat, on the same terms and for the same reason: it is pinned
+      // to this socket. A co-host who is merely reconnecting comes back as a new
+      // id and re-takes it, which costs them the moment the page takes to
+      // reconnect and is honest about what happened. See `CoHost.leave`.
+      coHostSockets.delete(listenerId)
+      coHost?.leave(listenerId)
       // Only on the way to none, and only when this socket was one of them: a
       // console with two tabs open still has decks after one of them closes.
       // Not during a shutdown either, where every socket is on its way out and
@@ -818,6 +905,20 @@ export function attachRealtime({
     log?.info({ hands: hands.length, decks: deckSockets.size }, 'telling the decks who asked')
     toDecks(handsMessage(hands))
   }
+  const onCoHostChange = (snapshot: CoHostSnapshot) => {
+    log?.info(
+      { seat: snapshot.seat?.id ?? null, listeners: wss.clients.size },
+      'broadcasting the co-host seat',
+    )
+    broadcast(coHostMessage(snapshot))
+  }
+  const onTransitionChange = (snapshot: TransitionSnapshot) => {
+    log?.info(
+      { blendMs: snapshot.blendMs, listeners: wss.clients.size },
+      'broadcasting the transition length',
+    )
+    broadcast(transitionMessage(snapshot))
+  }
   const onScheduleChange = (next: ScheduledSession | null) => {
     log?.info({ announced: next !== null, listeners: wss.clients.size }, 'broadcasting schedule')
     broadcast(scheduleMessage(next))
@@ -833,6 +934,8 @@ export function attachRealtime({
   mic?.on('change', onMicChange)
   floor?.on('change', onFloorChange)
   floor?.on('hands', onHandsChange)
+  coHost?.on('change', onCoHostChange)
+  station.transition.on('change', onTransitionChange)
   padding?.on('change', onPaddingChange)
 
   const onQueueChange = (entries: QueueEntry[]) => {
@@ -868,6 +971,8 @@ export function attachRealtime({
     mic?.off('change', onMicChange)
     floor?.off('change', onFloorChange)
     floor?.off('hands', onHandsChange)
+    coHost?.off('change', onCoHostChange)
+    station.transition.off('change', onTransitionChange)
     padding?.off('change', onPaddingChange)
 
     const sockets = [...wss.clients]
@@ -902,6 +1007,7 @@ export function attachRealtime({
   return {
     clientCount: () => wss.clients.size,
     listeners: () => presence.list(),
+    isCoHostSocket: (id: number) => coHostSockets.has(id) && socketsById.has(id),
     broadcast,
     close() {
       closing ??= shutdown()

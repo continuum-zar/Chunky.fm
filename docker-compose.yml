@@ -22,6 +22,10 @@ services:
       # Obsolete and harmless: an open station is now the default, so this says
       # nothing. Kept so a file carrying it keeps meaning what it meant.
       STATION_OPEN: ${STATION_OPEN:-}
+      # Optional, and empty is the ordinary case: unset, the co-host key is
+      # derived from ADMIN_PASSWORD, so a station always has one to hand out and
+      # rotating the password rotates it. Set this to rotate the seat on its own.
+      CO_HOST_KEY: ${CO_HOST_KEY:-}
       AUDIO_STORAGE_DIR: /data
       HOST: 0.0.0.0
       PORT: "3000"

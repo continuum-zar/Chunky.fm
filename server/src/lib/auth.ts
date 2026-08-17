@@ -9,6 +9,24 @@ export const ADMIN_COOKIE = 'chunky_admin'
 /** The signed cookie a listener gets in exchange for the station key. */
 export const LISTENER_COOKIE = 'chunky_listener'
 
+/** The signed cookie a co-host gets in exchange for the co-host key. */
+export const CO_HOST_COOKIE = 'chunky_cohost'
+
+/**
+ * How long a co-host seat lasts in a browser before the link is needed again.
+ *
+ * Between the other two on purpose, and the reason is who is holding it. An
+ * admin session is twelve hours because a set runs for an evening and whoever
+ * runs the decks is at a machine they own. An invite is a month because being
+ * asked to dig out a link every evening to *listen* is its own kind of broken.
+ *
+ * A co-host is a person on a phone who is expected back next week and whose
+ * seat can move records and open a microphone. A week is long enough that a
+ * regular partner never re-redeems mid-run, and short enough that a phone left
+ * in a taxi is not a standing invitation to the decks.
+ */
+export const CO_HOST_TTL_MS = 7 * 24 * 60 * 60 * 1000
+
 /**
  * How long an invite lasts in a browser before the link is needed again.
  *
@@ -28,6 +46,7 @@ export const SESSION_TTL_MS = 12 * 60 * 60 * 1000
  */
 const KEY_LABEL = 'chunky.fm/admin-session/v1'
 const LISTENER_KEY_LABEL = 'chunky.fm/listener-session/v1'
+const CO_HOST_KEY_LABEL = 'chunky.fm/co-host-session/v1'
 
 function constantTimeEquals(a: string, b: string): boolean {
   const left = Buffer.from(a, 'utf8')
@@ -91,6 +110,111 @@ export function verifyListenerSession(stationKey: string, token: string, now = D
   return Number.isFinite(expiresAt) && expiresAt > now
 }
 
+/**
+ * Derived from the co-host key for the reason the other two are derived from
+ * what they guard: rotating `CO_HOST_KEY` — or the admin password it falls back
+ * to — invalidates every seat already handed out, so an old link stops working
+ * everywhere at once.
+ */
+function coHostSigningKey(coHostKey: string): Buffer {
+  return createHmac('sha256', coHostKey).update(CO_HOST_KEY_LABEL).digest()
+}
+
+function signCoHost(coHostKey: string, payload: string): string {
+  return createHmac('sha256', coHostSigningKey(coHostKey)).update(payload).digest('base64url')
+}
+
+/** Mint a seat for a browser that has just presented the co-host key. */
+export function issueCoHostSession(
+  coHostKey: string,
+  now = Date.now(),
+  ttlMs = CO_HOST_TTL_MS,
+): AdminSession {
+  const expiresAt = now + ttlMs
+  const payload = `${expiresAt}.${randomBytes(12).toString('base64url')}`
+  return { token: `${payload}.${signCoHost(coHostKey, payload)}`, expiresAt }
+}
+
+export function verifyCoHostSession(coHostKey: string, token: string, now = Date.now()): boolean {
+  const cut = token.lastIndexOf('.')
+  if (cut <= 0) return false
+  if (!constantTimeEquals(token.slice(cut + 1), signCoHost(coHostKey, token.slice(0, cut)))) {
+    return false
+  }
+  const payload = token.slice(0, cut)
+  const expiresAt = Number(payload.slice(0, payload.indexOf('.')))
+  return Number.isFinite(expiresAt) && expiresAt > now
+}
+
+/** Does this candidate match the co-host key? The gate on taking the seat. */
+export function isValidCoHostKey(config: Config, candidate: unknown): boolean {
+  return typeof candidate === 'string' && constantTimeEquals(candidate, config.coHostKey)
+}
+
+/**
+ * Is this request a co-host, or something that outranks one?
+ *
+ * Admin credentials count, and that is not a shortcut. Whoever runs the decks
+ * can already do everything the seat can and more, and a console that had to
+ * hold a second cookie to drive its own queue would be a rule enforced against
+ * the one person it was never written for. The relation is a ladder, not two
+ * separate doors: admin ⊃ co-host.
+ *
+ * Raw headers rather than a `FastifyRequest`, so the websocket upgrade — which
+ * never becomes one — can ask the same question of the same code. That matters
+ * more here than it does for the admin gate: the socket is how the console
+ * learns which id to offer a microphone to.
+ */
+export function hasCoHostCredentials(
+  config: Config,
+  headers: IncomingHttpHeaders,
+  now = Date.now(),
+): boolean {
+  const token = readCookie(headers.cookie, CO_HOST_COOKIE)
+  if (token !== null && verifyCoHostSession(config.coHostKey, token, now)) return true
+
+  // For curl and the QA scripts, which have nowhere to keep a cookie. The same
+  // affordance `mayListen` gives the station key.
+  const presented = headers['x-cohost-key']
+  if (typeof presented === 'string' && constantTimeEquals(presented, config.coHostKey)) return true
+
+  return hasAdminCredentials(config, headers, now)
+}
+
+/** `Set-Cookie` for a fresh seat. */
+export function coHostCookie(session: AdminSession, secure: boolean, now = Date.now()): string {
+  return cookie(
+    session.token,
+    Math.max(0, Math.floor((session.expiresAt - now) / 1000)),
+    secure,
+    CO_HOST_COOKIE,
+  )
+}
+
+/** `Set-Cookie` that drops a seat the station no longer recognises. */
+export function clearedCoHostCookie(secure: boolean): string {
+  return cookie('', 0, secure, CO_HOST_COOKIE)
+}
+
+/**
+ * The gate on everything the seat can reach.
+ *
+ * Shaped exactly like `requireAdmin`, including shedding the cookie on the way
+ * out: a signature that no longer verifies is usually the admin password having
+ * changed, and a browser that went on presenting it would be refused on every
+ * request for the rest of the week the seat was minted for.
+ */
+export function requireCoHost(config: Config) {
+  return async function coHostGuard(request: FastifyRequest, reply: FastifyReply) {
+    if (!hasCoHostCredentials(config, request.headers)) {
+      return reply
+        .header('set-cookie', clearedCoHostCookie(isSecureRequest(request)))
+        .code(401)
+        .send({ error: 'unauthorized', message: 'co-host credentials required' })
+    }
+  }
+}
+
 /** Does this candidate match the station key? The gate on redeeming a link. */
 export function isValidStationKey(config: Config, candidate: unknown): boolean {
   // Falsy rather than `=== null`: an unset env var, an empty one and a config
@@ -128,7 +252,12 @@ export function mayListen(
   const presented = headers['x-station-key']
   if (typeof presented === 'string' && constantTimeEquals(presented, config.stationKey)) return true
 
-  return hasAdminCredentials(config, headers, now)
+  // And a co-host, who obviously may hear the station they are helping run.
+  // Without this a private station would hand somebody a co-host link and then
+  // refuse their websocket, which presents as a seat that cannot connect — and
+  // the co-host page is *mostly* socket, so it would present as nothing working
+  // at all. `hasCoHostCredentials` already admits an admin, so this covers both.
+  return hasCoHostCredentials(config, headers, now)
 }
 
 /** The gate on everything a listener can reach. */

@@ -39,17 +39,12 @@ export interface AirMixerHandle {
    * happened to re-render the console.
    */
   roomTrack: MediaStreamTrack | null
-  /** The same, minus the guest. See `airMixer`. */
-  guestTrack: MediaStreamTrack | null
 }
 
 export function useAirMixer(): AirMixerHandle {
   const held = useRef<AirMixer | null>(null)
   const [mixer, setMixer] = useState<AirMixer | null>(null)
-  const [tracks, setTracks] = useState<{
-    room: MediaStreamTrack | null
-    guest: MediaStreamTrack | null
-  }>({ room: null, guest: null })
+  const [roomTrack, setRoomTrack] = useState<MediaStreamTrack | null>(null)
 
   const ensure = useCallback(() => {
     if (held.current) return held.current
@@ -71,7 +66,13 @@ export function useAirMixer(): AirMixerHandle {
     // Read once, here, rather than on every render. A destination node has its
     // track from the moment it exists, so there is nothing to wait for and
     // nothing that would change it later.
-    setTracks({ room: built.roomTrack, guest: built.guestTrack })
+    //
+    // The minus-buses are deliberately not read here alongside it. There is one
+    // per voice now and they are built on demand, so there is no fixed set to
+    // hold in state — whatever needs one asks `mixer.seatTrack(id)` for it at
+    // the moment it knows the id, which is also the moment it has one to ask
+    // about. See `airMixer`.
+    setRoomTrack(built.roomTrack)
     return built
   }, [])
 
@@ -86,5 +87,5 @@ export function useAirMixer(): AirMixerHandle {
     [],
   )
 
-  return { ensure, mixer, roomTrack: tracks.room, guestTrack: tracks.guest }
+  return { ensure, mixer, roomTrack }
 }

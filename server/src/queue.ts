@@ -47,6 +47,20 @@ export class TrackQueue extends EventEmitter {
     return entry
   }
 
+  /**
+   * What is next, without taking it. Null when there is nothing queued.
+   *
+   * The crossfade needs this and nothing else does. An overlap has to be sized
+   * against *both* records — half the shorter of the two, see
+   * `Transition.overlapFor` — so the station has to know how long the next
+   * track is several seconds before it is allowed to start it. Taking it early
+   * and putting it back would be a queue that briefly lies to the room about
+   * what is coming.
+   */
+  peek(): QueueEntry | null {
+    return this.#entries[0] ?? null
+  }
+
   /** Pull the head off, for the decks. Null when there is nothing queued. */
   take(): QueueEntry | null {
     const entry = this.#entries.shift()

@@ -64,6 +64,43 @@ export interface StateMessage {
   /** Position in ms while paused; null while playing. */
   pausedAt: number | null
   serverTime: number
+  /**
+   * The record still finishing under this one, during a crossfade. Null the
+   * rest of the time, and null always on a station whose blend is zero.
+   *
+   * `track` above is unchanged in meaning: it is what is on, and during an
+   * overlap that is the incoming record from the instant it starts. Everything
+   * that reads `track` — the lyrics, the history, the media session, the
+   * now-playing line — wants the new one the moment the blend begins, and gets
+   * it without knowing this field exists.
+   *
+   * So this is additive and ignorable, which is the property that matters: a
+   * page that has never heard of it plays the incoming track on the clock and
+   * cuts. Both stay on the shared clock.
+   */
+  outgoing: Outgoing | null
+}
+
+/**
+ * A record on its way out. See the server's `playback.ts`, which owns this.
+ *
+ * Two absolute instants rather than a length, so a listener who joins *during*
+ * a crossfade can work out where in it they have landed rather than being told
+ * how long it was for whoever was already here. The fade window is exactly
+ * `[state.startedAt, outgoing.endsAt]` — the incoming record's beginning to the
+ * outgoing one's end — and neither end has to be inferred.
+ */
+export interface Outgoing {
+  track: Track
+  /** Server epoch ms at which the outgoing track was at 0:00. */
+  startedAt: number
+  /**
+   * Server epoch ms at which it stops, and the far end of the blend.
+   *
+   * Its natural end when the station reached the transition by running out of
+   * record. Sooner when somebody pressed the transition button halfway through.
+   */
+  endsAt: number
 }
 
 /**
@@ -161,6 +198,48 @@ export interface FloorMessage {
 
 /** The same two as they come back from `/api/floor`, without the frame. */
 export type FloorSnapshot = Omit<FloorMessage, 'type'>
+
+/**
+ * Who is co-hosting. Sent on connect and on every change.
+ *
+ * The third of the frames about voices, and it is neither of the other two. The
+ * floor is a listener the decks brought up, which is a favour granted and
+ * revocable. This is somebody who arrived holding a key: they seated
+ * themselves, they queue records, and releasing their talk button does not
+ * stand them down.
+ *
+ * Broadcast to the whole room. The room hears this person all evening and is
+ * owed their name; the console reads the id off it to know which socket to
+ * offer a second microphone to; and the co-host's own page reads it to find out
+ * whether it still holds the seat after a reconnect.
+ */
+export interface CoHostMessage {
+  type: 'cohost'
+  seat: (Listener & { since: number }) | null
+}
+
+/** The same one as it comes back from `/api/cohost`, without the frame. */
+export type CoHostSnapshot = Omit<CoHostMessage, 'type'>
+
+/**
+ * How long one record overlaps the next, in ms. Zero is a hard cut.
+ *
+ * The whole of the crossfade on the wire. What actually fades is two gain nodes
+ * in every listener's browser, against the two instants on the playback
+ * snapshot — the station carries no more of a transition than it carries of the
+ * music, which is the same trick the duck plays one turn further.
+ *
+ * Carried whether or not anything is playing, for the reason `duckTo` is: a
+ * page always knows how to run the next transition before it is asked to, and
+ * the co-host's slider has something to show before the first one.
+ */
+export interface TransitionMessage {
+  type: 'transition'
+  blendMs: number
+}
+
+/** The same one as it comes back from `/api/transition`, without the frame. */
+export type TransitionSnapshot = Omit<TransitionMessage, 'type'>
 
 /**
  * Who has asked for the mic. Only a console is ever sent one of these.
@@ -390,6 +469,8 @@ export type ServerMessage =
   | ScheduleMessage
   | MicMessage
   | FloorMessage
+  | CoHostMessage
+  | TransitionMessage
   | HandsMessage
   | QueueMessage
   | PresenceMessage

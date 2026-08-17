@@ -1,5 +1,6 @@
 import type {
   AirSnapshot,
+  CoHostSnapshot,
   FloorSnapshot,
   MicSnapshot,
   PlaybackSnapshot,
@@ -7,6 +8,7 @@ import type {
   ScheduledSession,
   SessionKind,
   Track,
+  TransitionSnapshot,
   Wish,
   WishStatus,
 } from './protocol.js'
@@ -384,6 +386,47 @@ export class AdminApi {
   floor(action: 'drop'): Promise<FloorSnapshot>
   floor(action: 'invite' | 'drop', listener?: number): Promise<FloorSnapshot> {
     return this.#json<FloorSnapshot>('POST', '/api/floor', { action, listener })
+  }
+
+  /**
+   * The co-host key, so the console can build a link to send.
+   *
+   * Admin-only at the station, and that is the whole policy: a co-host's own
+   * browser cannot rebuild the link — the cookie is HttpOnly and the key came
+   * out of the address bar on arrival — so the only way to be given the seat is
+   * for the person with the password to hand it over. A co-host who could read
+   * this could quietly recruit a third.
+   */
+  async coHostKey(): Promise<{ key: string }> {
+    return this.#json<{ key: string }>('GET', '/api/cohost/key')
+  }
+
+  /**
+   * Take the seat back, from whoever is in it.
+   *
+   * Names nobody, because there is only ever one of them and because this is
+   * one button in a hurry. The co-host's own half of the same conversation —
+   * sitting down, keeping the seat, standing up — goes through `CoHostApi`,
+   * where their credential is.
+   */
+  async dropCoHost(): Promise<CoHostSnapshot> {
+    return this.#json<CoHostSnapshot>('POST', '/api/cohost/seat', { action: 'leave' })
+  }
+
+  /**
+   * How long one record overlaps the next, in ms. Zero is a hard cut.
+   *
+   * Where the fader now stands rather than a step, like the duck and the
+   * padding, so a slider that lost its answer cannot walk the crossfade out on
+   * retry. Clamped at the station, which is why the answer is worth reading back.
+   */
+  async blend(blendMs: number): Promise<TransitionSnapshot> {
+    // Rounded here rather than left to the schema: a slider reporting
+    // 3000.0000000004 gets a 400 for being a number the station calls not an
+    // integer, which is a refusal nobody could act on.
+    return this.#json<TransitionSnapshot>('POST', '/api/transition', {
+      blendMs: Math.round(blendMs),
+    })
   }
 
   async queue(): Promise<QueueEntry[]> {

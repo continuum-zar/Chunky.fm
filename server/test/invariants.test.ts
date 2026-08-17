@@ -99,10 +99,10 @@ describe('the socket, over a real connection', () => {
     await harness.cleanup()
   })
 
-  it('opens with the whole room: you, air, schedule, mic, floor, state, queue, roster, history, chat', async () => {
+  it('opens with the whole room: you, air, schedule, mic, floor, cohost, transition, state, queue, roster, history, chat', async () => {
     for (let i = 0; i < 5; i++) {
       const client = await TestClient.connect(harness.wsUrl)
-      await client.nextChat() // the last of the ten
+      await client.nextChat() // the last of the twelve
       expect(client.seen.map((m) => m.type)).toEqual([
         // Who this socket is, before anything about the station: an offer is
         // addressed to an id, and both ends of one need to know which id is
@@ -129,6 +129,14 @@ describe('the socket, over a real connection', () => {
         // raised hands — and a listener never does, which is the only asymmetry
         // in the burst and the whole of this feature's privacy story.
         'floor',
+        // And who is co-hosting, in the same breath: a second voice on the air
+        // for the whole evening is a second name the room is owed before it
+        // arrives, the same way a guest's is.
+        'cohost',
+        // Last of the frames that change how the music is played, and still
+        // before the music itself. A page told what is on without being told
+        // how long a transition runs would run the first one as a cut.
+        'transition',
         'state',
         'queue',
         'presence',

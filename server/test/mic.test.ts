@@ -22,6 +22,102 @@ import { DEFAULT_DUCK, MIC_LEASE_MS, MIN_DUCK, Mic } from '../src/mic.js'
 import { type Harness, fakeClock, signIn, startHarness } from './helpers.js'
 import { TestClient } from './ws-client.js'
 
+describe('Mic, with two people talking', () => {
+  /**
+   * The mic is open while *anybody* is holding it.
+   *
+   * A boolean was exactly right while there was one person who could talk. A
+   * co-host makes two, both working a push-to-talk button, and the failure a
+   * boolean gives is specific and bad: the co-host finishing a sentence
+   * un-ducks the room in the middle of one the decks are still saying.
+   */
+  it('stays open while the decks are still talking after a co-host stops', () => {
+    const mic = new Mic()
+    const heard = vi.fn()
+    mic.open('decks')
+    mic.open('cohost')
+    mic.on('change', heard)
+
+    expect(mic.close('cohost')).toBe(false)
+    expect(mic.live).toBe(true)
+    // Nothing a listener can hear has changed, so nothing is broadcast.
+    expect(heard).not.toHaveBeenCalled()
+
+    expect(mic.close('decks')).toBe(true)
+    expect(mic.live).toBe(false)
+    expect(heard).toHaveBeenCalledTimes(1)
+  })
+
+  it('announces the break once, at the first voice, and dates it from there', () => {
+    const clock = fakeClock()
+    const mic = new Mic({ now: clock.now })
+    const heard = vi.fn()
+    mic.on('change', heard)
+
+    mic.open('decks')
+    const began = mic.snapshot().since
+    clock.advance(3_000)
+    // A second person joining a break that is already happening is not a second
+    // break, and the room does not need a frame about it.
+    expect(mic.open('cohost')).toBe(false)
+
+    expect(mic.snapshot().since).toBe(began)
+    expect(heard).toHaveBeenCalledTimes(1)
+  })
+
+  it('renews one grip without touching the other', () => {
+    const clock = fakeClock()
+    const mic = new Mic({ now: clock.now })
+    mic.open('decks')
+    mic.open('cohost')
+
+    clock.advance(MIC_LEASE_MS - 500)
+    mic.renew('decks')
+    clock.advance(1_000)
+
+    // The co-host's phone stopped renewing — a tunnel, a locked screen. One
+    // grip lost, not a mic break ending.
+    expect(mic.sweep()).toBe(false)
+    expect(mic.live).toBe(true)
+    expect(mic.holders()).toEqual(['decks'])
+  })
+
+  it('shuts when the last grip lapses, whoever it belonged to', () => {
+    const clock = fakeClock()
+    const mic = new Mic({ now: clock.now })
+    mic.open('cohost')
+
+    clock.advance(MIC_LEASE_MS)
+    expect(mic.sweep()).toBe(true)
+    expect(mic.live).toBe(false)
+    expect(mic.snapshot().since).toBeNull()
+  })
+
+  it('hurries only the grip it was told to', () => {
+    const clock = fakeClock()
+    const mic = new Mic({ now: clock.now })
+    mic.open('decks')
+    mic.open('cohost')
+
+    // The console's socket dropped. That says nothing about the phone.
+    expect(mic.hurry(1_000, 'decks')).toBe(true)
+    clock.advance(1_000)
+    expect(mic.sweep()).toBe(false)
+    expect(mic.holders()).toEqual(['cohost'])
+  })
+
+  it('shuts for everybody when the session ends', () => {
+    const mic = new Mic()
+    mic.open('decks')
+    mic.open('cohost')
+
+    mic.clear()
+
+    expect(mic.live).toBe(false)
+    expect(mic.holders()).toEqual([])
+  })
+})
+
 describe('Mic', () => {
   it('starts shut, at a depth it can already answer for', () => {
     // `duckTo` is a real value from the start rather than a null waiting for

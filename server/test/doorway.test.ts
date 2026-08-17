@@ -17,6 +17,7 @@ import { type Harness, startHarness } from './helpers.js'
 const INDEX = '<!doctype html><title>station</title><div id="root"></div><script src="/assets/station-abc.js">'
 const LANDING = '<!doctype html><title>chunky.fm</title><div id="root"></div><script src="/assets/landing-abc.js">'
 const HOW = '<!doctype html><title>How chunky.fm works</title><h1>How chunky.fm works</h1>'
+const COHOST = '<!doctype html><title>chunky.fm \u00b7 co-host</title><div id="root"></div>'
 const NOT_FOUND = '<!doctype html><title>Not a page</title><h1>Nothing at this address</h1>'
 
 describe('doorway rules', () => {
@@ -97,6 +98,33 @@ describe('doorway rules', () => {
   })
 })
 
+describe('the co-host door', () => {
+  it('answers /cohost with its own document', () => {
+    expect(doorway('/cohost')).toEqual({ kind: 'cohost' })
+  })
+
+  it('answers a co-host link with the same document, key and all', () => {
+    // Unlike an invite at `/`, there is nowhere to forward this to: the page
+    // being served is the one with the code in it to redeem the key, and it
+    // reads it out of its own address bar. A redirect would put the secret
+    // through a second Location header and a second history entry for nothing.
+    expect(doorway('/cohost?k=abc123')).toEqual({ kind: 'cohost' })
+  })
+
+  it('sends the filename to the address the link actually says', () => {
+    expect(doorway('/cohost.html')).toEqual({
+      kind: 'redirect',
+      status: 301,
+      location: '/cohost',
+    })
+  })
+
+  it('is not caught by anything looser', () => {
+    expect(doorway('/cohosting')).toEqual({ kind: 'pass' })
+    expect(doorway('/cohost/seat')).toEqual({ kind: 'pass' })
+  })
+})
+
 describe('isStationPath', () => {
   it('names the two paths that are the station', () => {
     expect(isStationPath('/listen')).toBe(true)
@@ -136,6 +164,7 @@ describe('serving the client from the server', () => {
     await fs.writeFile(path.join(clientDir, 'index.html'), INDEX)
     await fs.writeFile(path.join(clientDir, 'landing.html'), LANDING)
     await fs.writeFile(path.join(clientDir, 'how-it-works.html'), HOW)
+    await fs.writeFile(path.join(clientDir, 'cohost.html'), COHOST)
     await fs.writeFile(path.join(clientDir, '404.html'), NOT_FOUND)
     await fs.writeFile(path.join(clientDir, 'assets', 'station-abc.js'), 'console.log(1)')
     harness = await startHarness({ clientDir })

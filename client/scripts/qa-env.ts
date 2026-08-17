@@ -23,13 +23,36 @@ export const OTHER_TRACK_ID = Number(process.env.OTHER_TRACK_ID ?? 2)
  * Evaluate bodies are strings on purpose: the TypeScript runner rewrites inline
  * functions with helpers (`__name`) that do not exist inside the page.
  */
+
+/**
+ * The deck the record is actually on.
+ *
+ * A page holds *two* `<audio>` elements, because a transition is two records
+ * playing at once, and which of them is the front one alternates every
+ * crossfade — see `lib/decking.ts`, and the rule that a record already playing
+ * is never moved. So `querySelector('audio')` is not "the station": it is deck
+ * A, which after an odd number of transitions is the idle one.
+ *
+ * Whichever is unpaused and past zero, then. During a crossfade both are, and
+ * the one further from its own beginning is the record on its way out, so the
+ * incoming one is the one with the *smaller* currentTime. That is the record
+ * every one of these probes means by "what is on".
+ */
+const FRONT_DECK = `(function () {
+  var live = Array.prototype.slice
+    .call(document.querySelectorAll('audio'))
+    .filter(function (el) { return !el.paused && el.currentTime > 0 })
+  if (live.length === 0) return document.querySelector('audio')
+  return live.sort(function (a, b) { return a.currentTime - b.currentTime })[0]
+})()`
+
 export const PLAYING = `(() => {
-  const a = document.querySelector('audio')
+  const a = ${FRONT_DECK}
   return !!a && !a.paused && a.currentTime > 0
 })()`
 
 export const AUDIO = `(() => {
-  const a = document.querySelector('audio')
+  const a = ${FRONT_DECK}
   return {
     currentTime: a ? a.currentTime : -1,
     paused: a ? a.paused : true,
@@ -40,12 +63,19 @@ export const AUDIO = `(() => {
 
 export const STATUS = `(document.querySelector('.status') || {}).textContent || ''`
 
-/** Records every seek, so an otherwise invisible audio glitch becomes countable. */
+/**
+ * Records every seek, so an otherwise invisible audio glitch becomes countable.
+ *
+ * Both decks, because either can be the one carrying the record — see
+ * `FRONT_DECK` — and because a seek on the deck that is *fading out* is just as
+ * audible as one on the deck coming up.
+ */
 export const INSTRUMENT_SEEKS = `(() => {
-  const a = document.querySelector('audio')
   window.__seeks = []
-  a.addEventListener('seeking', function () {
-    window.__seeks.push({ at: Date.now(), to: a.currentTime })
+  Array.prototype.slice.call(document.querySelectorAll('audio')).forEach(function (a) {
+    a.addEventListener('seeking', function () {
+      window.__seeks.push({ at: Date.now(), to: a.currentTime })
+    })
   })
   return true
 })()`
@@ -130,7 +160,16 @@ export function micCommand(body: unknown): Promise<{ live: boolean; duckTo: numb
  * changes. Patching the one method the stage uses turns it into a list, and
  * does it without the app carrying a seam that exists only for a test.
  *
- * Every ramp in the station is the duck, so nothing else lands in here.
+ * `setTargetAtTime` and nothing else, which is what keeps this measuring one
+ * thing. The station's graph has five gains in it now — the duck, the mute, a
+ * listener's own music level, and one per deck — and only the first three are
+ * a hand on a fader. The decks are the crossfade and move on *linear* ramps
+ * (see `DECK_SETTLE_S` and the fade segments beside it), so a transition does
+ * not land in here and this does not have to be told about one.
+ *
+ * The mute would, and the music level would, and neither is touched by the
+ * scripts that read this. If one ever is, that is the moment to make the
+ * instrument record which node each ramp was on.
  */
 export const INSTRUMENT_DUCKS = `(() => {
   window.__ducks = []

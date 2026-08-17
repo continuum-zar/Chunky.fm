@@ -1,0 +1,566 @@
+@import '../tokens.css';
+
+/* chunky.fm: the co-host's page.
+ *
+ * A control surface held in one hand, not a page you read. Everything about the
+ * layout follows from that and from one number: the bottom third of a phone
+ * screen is where a thumb reaches without the hand moving, and the talk button
+ * is the only thing on this page that has to be reachable while you are looking
+ * somewhere else.
+ *
+ * Drawn from the same tokens as the station and the console, so the seat looks
+ * like the thing it is half of. What it does not share is the layout: the
+ * console is three columns of cards on a wide screen, and there is no honest
+ * way to make that a phone.
+ */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-body, 'Space Grotesk', system-ui, sans-serif);
+  /* Nothing here scrolls sideways, and a rubber-band overscroll under a talk
+     button is a page that moves while you are holding it. */
+  overscroll-behavior: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  min-height: 100%;
+}
+
+.seat {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 100dvh;
+  max-width: 560px;
+  margin: 0 auto;
+  /* `env(safe-area-inset-*)` because `viewport-fit=cover` is set on the
+     document: without these the talk button sits under the home indicator on
+     every phone made since 2017, which is the one control that must not. */
+  padding: calc(14px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right))
+    calc(14px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left));
+}
+
+.seat--door,
+.seat--sitdown,
+.seat--waiting {
+  justify-content: center;
+  gap: 18px;
+}
+
+.seat__title {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.seat__blurb {
+  margin: 0;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.seat__small {
+  margin: 0;
+  color: var(--faint);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.seat__note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.seat__error {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--live-wash);
+  box-shadow: var(--ring);
+  color: var(--live-text);
+  font-size: 14px;
+}
+
+/* --- naming yourself, and the door ---------------------------------------- */
+
+.seat__form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.seat__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.seat__field input {
+  padding: 14px 14px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--raised);
+  box-shadow: var(--ring);
+  color: var(--fg);
+  font: inherit;
+  font-size: 17px; /* Under 16px and iOS zooms the whole page on focus. */
+}
+
+.seat__sit {
+  padding: 16px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--fg);
+  color: var(--bg);
+  font: inherit;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.seat__sit:disabled {
+  opacity: 0.4;
+}
+
+/* --- what is on ----------------------------------------------------------- */
+
+.seat__now {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border-radius: 16px;
+  background: var(--card);
+  box-shadow: var(--ring);
+}
+
+.seat__now-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.seat__lamp {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--faint);
+}
+
+/* Red is only ever "on the air", here as everywhere else in the design. */
+.seat__lamp--live {
+  background: var(--live);
+  box-shadow: 0 0 8px var(--live);
+}
+
+.seat__now-title {
+  overflow: hidden;
+  font-size: 17px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.seat__now-artist {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.seat__now-artist em {
+  flex: none;
+  font-family: var(--font-mono, 'Cousine', ui-monospace, monospace);
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+.seat__progress {
+  height: 3px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 10%);
+}
+
+.seat__progress-fill {
+  display: block;
+  height: 100%;
+  background: var(--fg-dim);
+  /* Not animated. The bar is redrawn from the clock on every render, and a
+     transition on the width would be a bar lagging the record it describes. */
+}
+
+/* --- hold to talk ---------------------------------------------------------
+ *
+ * The biggest thing on the page, and by a wide margin. It is the only control
+ * anybody reaches for without looking, and `min-height` rather than a fixed one
+ * so it takes whatever vertical room the rest of the page leaves.
+ */
+
+.ptt {
+  display: flex;
+  min-height: 30dvh;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 20px;
+  border: 0;
+  border-radius: 24px;
+  background: var(--raised);
+  box-shadow: var(--ring-strong);
+  color: var(--fg);
+  font: inherit;
+  /* Without this a press-and-hold on a phone starts a text selection or a
+     callout menu, and the gesture that is supposed to open a microphone opens
+     a share sheet instead. */
+  touch-action: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+}
+
+.ptt:disabled {
+  opacity: 0.35;
+}
+
+.ptt--live {
+  background: var(--live-wash);
+  box-shadow:
+    var(--ring-strong),
+    0 0 0 2px var(--live);
+  color: var(--live-text);
+}
+
+.ptt__label {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.ptt__meter {
+  display: block;
+  width: min(80%, 320px);
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 10%);
+}
+
+.ptt__meter-fill {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--ok);
+  transform: scaleX(0);
+  transform-origin: left;
+}
+
+/* The clip lamp. Set as an attribute rather than a class because the meter is
+   painted from an animation frame sixty times a second and must never render. */
+.ptt__meter-fill[data-clip='true'] {
+  background: var(--live);
+}
+
+.seat__hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+/* --- the two faders ------------------------------------------------------- */
+
+.faders {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.fader {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: var(--card);
+  box-shadow: var(--ring);
+}
+
+.fader__label {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--fg-dim);
+  font-size: 14px;
+}
+
+.fader__label em {
+  color: var(--muted);
+  font-family: var(--font-mono, 'Cousine', ui-monospace, monospace);
+  font-size: 13px;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+.fader input[type='range'] {
+  width: 100%;
+  height: 28px;
+  margin: 0;
+  accent-color: var(--fg);
+  background: transparent;
+  /* A range input's default hit area on a phone is the thumb alone, which is a
+     14px target on a control somebody is adjusting while talking. */
+  touch-action: pan-y;
+}
+
+/* --- the transport -------------------------------------------------------- */
+
+.transport {
+  display: grid;
+  grid-template-columns: 1fr 1.4fr 1fr;
+  gap: 8px;
+}
+
+.transport__button {
+  padding: 16px 8px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--raised);
+  box-shadow: var(--ring);
+  color: var(--fg);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* The transition is the point of this row, so it is the one that is filled. */
+.transport__button--blend {
+  background: var(--fg);
+  color: var(--bg);
+}
+
+.transport__button:disabled {
+  opacity: 0.35;
+}
+
+/* --- what plays next ------------------------------------------------------ */
+
+.upnext {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 16px;
+  background: var(--card);
+  box-shadow: var(--ring);
+}
+
+.upnext__tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  padding: 4px;
+  border-radius: 12px;
+  background: rgb(255 255 255 / 5%);
+}
+
+.upnext__tab {
+  padding: 10px 6px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.upnext__tab--on {
+  background: var(--raised);
+  box-shadow: var(--ring);
+  color: var(--fg);
+}
+
+.upnext__search {
+  padding: 12px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--raised);
+  box-shadow: var(--ring);
+  color: var(--fg);
+  font: inherit;
+  font-size: 17px; /* See `.seat__field input`: under 16px and iOS zooms. */
+}
+
+.upnext__list {
+  display: flex;
+  max-height: 44dvh;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+  /* The list scrolls inside itself so the talk button never leaves the screen:
+     a queue long enough to push it below the fold is a queue that has taken the
+     one control this page exists for away. */
+  -webkit-overflow-scrolling: touch;
+}
+
+.upnext__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border-radius: 10px;
+  background: rgb(255 255 255 / 4%);
+}
+
+.upnext__pos {
+  width: 20px;
+  flex: none;
+  color: var(--faint);
+  font-family: var(--font-mono, 'Cousine', ui-monospace, monospace);
+  font-size: 13px;
+  text-align: center;
+}
+
+.upnext__what {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.upnext__what strong {
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.upnext__what em {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.upnext__moves {
+  display: flex;
+  flex: none;
+  gap: 4px;
+}
+
+.upnext__move {
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--raised);
+  color: var(--fg-dim);
+  font: inherit;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.upnext__move--drop {
+  color: var(--live-text);
+}
+
+.upnext__move:disabled {
+  opacity: 0.3;
+}
+
+.upnext__add {
+  flex: none;
+  padding: 10px 14px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--fg);
+  color: var(--bg);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.upnext__add:disabled {
+  opacity: 0.4;
+}
+
+.upnext__empty {
+  margin: 0;
+  padding: 14px 4px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* --- the foot ------------------------------------------------------------- */
+
+.seat__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 4px;
+}
+
+.seat__foot-who {
+  overflow: hidden;
+  color: var(--faint);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.seat__stand {
+  flex: none;
+  padding: 10px 14px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  box-shadow: var(--ring);
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+}
+
+/* On a wide screen — a co-host at a laptop, or somebody testing — the page
+   stays a column rather than growing into a second console. The layout is for
+   a hand, and a hand does not get bigger. */
+@media (min-width: 700px) {
+  .seat {
+    gap: 16px;
+    padding-block: 24px;
+  }
+
+  .ptt {
+    min-height: 220px;
+  }
+}

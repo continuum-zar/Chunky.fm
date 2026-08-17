@@ -71,6 +71,10 @@ function origin(): Plugin {
  *   /welcome        where the landing page used to be
  *   /how-it-works   the page that explains the station, same rewrite as `/`:
  *                   the address a link points at has no `.html` on the end of it
+ *   /cohost         the co-host's control surface, its own document for the
+ *                   reason `/how-it-works` is one: a separate bundle, served
+ *                   without its `.html` because that is the address the link
+ *                   somebody is sent actually says
  *
  * `/listen` needs no rule in either place: Vite's SPA fallback answers it with
  * the station, and nginx names it outright.
@@ -105,6 +109,16 @@ function doorway(): Plugin {
 
     if (path === '/how-it-works') {
       req.url = query === undefined ? '/how-it-works.html' : `/how-it-works.html?${query}`
+      next()
+      return
+    }
+
+    // The query survives whole, because a co-host link is `/cohost?k=<key>` and
+    // the page reads the key out of its own address bar. Rewritten rather than
+    // redirected, for the reason `/` is: a redirect would put the key through a
+    // second `Location` header and a second entry in the browser's history.
+    if (path === '/cohost') {
+      req.url = query === undefined ? '/cohost.html' : `/cohost.html?${query}`
       next()
       return
     }
@@ -145,6 +159,11 @@ export default defineConfig({
       input: {
         station: 'index.html',
         landing: 'landing.html',
+        // The co-host's own document. A third entry rather than a route on the
+        // station, and the reason is the device: the station's bundle carries a
+        // globe, a gramophone and three.js, and none of that belongs on a phone
+        // whose whole job is one button. See `src/cohost/main.tsx`.
+        cohost: 'cohost.html',
         // No script tag on this one, and it is still an input rather than a
         // file in public/: it needs `%ORIGIN%` and `%BUILT%` substituted, and
         // public/ is copied byte for byte without going near a plugin.

@@ -20,6 +20,10 @@
  *   /?k=<key>           an invite, sent on to the station with the key intact
  *   /welcome            where the landing page used to live
  *   /how-it-works       the page explaining how the station does what it claims
+ *   /cohost             the co-host's control surface, its own document
+ *   /cohost?k=<key>     a co-host link, which is the same document: the page
+ *                       reads the key out of its own address bar, so unlike an
+ *                       invite there is nowhere else to send it
  *   /*.html             the documents' own filenames, sent to the address the
  *                       canonical links and the sitemap actually name
  *
@@ -43,11 +47,22 @@ export type Doorway =
   | { kind: 'landing' }
   /** The page explaining how it works. Prose; no bundle behind it. */
   | { kind: 'how' }
+  /** The co-host's control surface. Its own bundle; see `CO_HOST_PATH`. */
+  | { kind: 'cohost' }
   /** Not the doorway's business: a route, an asset, or the app itself. */
   | { kind: 'pass' }
 
 /** The address of the explaining page, spelled the same in all four copies. */
 export const HOW_PATH = '/how-it-works'
+
+/**
+ * The address of the co-host's page, spelled the same in all four copies.
+ *
+ * Kept in step with `CO_HOST_PATH` in the client's `src/lib/routes.ts` by hand,
+ * for the reason `INVITE_PARAM` is kept in step with the client's: nothing
+ * imports across the two workspaces.
+ */
+export const CO_HOST_PATH = '/cohost'
 
 /**
  * Where a request at the front door goes.
@@ -72,6 +87,14 @@ export function doorway(url: string): Doorway {
     return { kind: 'how' }
   }
 
+  // The query is deliberately not read. A co-host link carries `?k=<key>` and
+  // the page redeems it out of its own address bar, so unlike an invite at `/`
+  // there is nowhere else for this to be sent: with a key or without one, the
+  // answer is the same document.
+  if (path === CO_HOST_PATH) {
+    return { kind: 'cohost' }
+  }
+
   // The documents' own filenames. Every address that matters names them without
   // the extension — the canonical links, the sitemap, every link the pages draw
   // — so the filename is a second address for a page that already has one, and
@@ -83,6 +106,9 @@ export function doorway(url: string): Doorway {
   }
   if (path === '/how-it-works.html') {
     return { kind: 'redirect', status: 301, location: HOW_PATH }
+  }
+  if (path === '/cohost.html') {
+    return { kind: 'redirect', status: 301, location: CO_HOST_PATH }
   }
   if (path === '/index.html') {
     return { kind: 'redirect', status: 301, location: '/listen' }

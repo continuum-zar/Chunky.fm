@@ -219,6 +219,26 @@ function Doorway({
 
 function Station({ route: requested, session }: { route: Route; session: AdminSession }) {
   const audioRef = useRef<HTMLAudioElement>(null)
+  /**
+   * The second deck, for the record on its way out during a crossfade.
+   *
+   * Two elements rather than one, because a transition is two records playing
+   * at once and one element cannot be in two places in a song. Which of the two
+   * holds what alternates every transition — see `lib/decking.ts` — so neither
+   * of these refs is "the current track"; they are a pair, and the hook decides.
+   */
+  const secondRef = useRef<HTMLAudioElement>(null)
+
+  /**
+   * The gain stage the music sits in, so the decks can talk over it.
+   *
+   * Built at join and not before. Routing an element through Web Audio is
+   * permanent and total, and a context that has never been resumed is silence
+   * rather than quiet music, so the graph is made in the one place there is a
+   * gesture to spend on waking it. See `lib/audio-graph.ts`.
+   */
+  const stage = useRef<StationAudio | null>(null)
+  useEffect(() => () => stage.current?.close(), [])
   // Nothing here asks how wide the window is any more. The landing view is the
   // record and the words to it at every width, and whether those sit side by
   // side or stacked is a question the stylesheet answers on its own — which is
@@ -287,8 +307,12 @@ function Station({ route: requested, session }: { route: Route; session: AdminSe
     mic,
     applyMic,
     floor,
+    coHost,
+    transition,
     hands,
     applyFloor,
+    applyCoHost,
+    applyTransition,
     me,
     decks,
   } = useStation(
@@ -338,23 +362,17 @@ function Station({ route: requested, session }: { route: Route; session: AdminSe
 
   useSyncedAudio({
     audioRef,
+    secondRef,
+    // Null until the join click builds it, which is also before anything here
+    // is allowed to make a sound. A page with no stage plays the incoming
+    // record on the clock and cuts, which is the station this was before.
+    stage: stage.current,
     state,
     joined,
     serverNow: clock.serverNow,
     synced: clock.synced,
     onCorrection,
   })
-
-  /**
-   * The gain stage the music sits in, so the decks can talk over it.
-   *
-   * Built at join and not before. Routing an element through Web Audio is
-   * permanent and total, and a context that has never been resumed is silence
-   * rather than quiet music, so the graph is made in the one place there is a
-   * gesture to spend on waking it. See `lib/audio-graph.ts`.
-   */
-  const stage = useRef<StationAudio | null>(null)
-  useEffect(() => () => stage.current?.close(), [])
 
   /**
    * The voice, when there is one.
@@ -522,7 +540,10 @@ function Station({ route: requested, session }: { route: Route; session: AdminSe
       // browser will let a context be resumed. It is also the last moment it is
       // safe to route the element at all: after this the music only reaches the
       // speakers through the graph.
-      stage.current = stationAudio(audio)
+      // Both elements, so the graph has two decks to fade between. The second
+      // is optional at this seam on purpose: everything downstream degrades to
+      // a hard cut rather than to silence if it is ever missing.
+      stage.current = stationAudio(audio, secondRef.current)
       // Applied here rather than left to the effect, so somebody arriving in
       // the middle of a mic break comes in already ducked. The effect runs
       // after the commit, which is a few milliseconds of a song at full volume
@@ -731,8 +752,12 @@ function Station({ route: requested, session }: { route: Route; session: AdminSe
             applyQueue={applyQueue}
             applyPadding={applyPadding}
             floor={floor}
+            coHost={coHost}
+            transition={transition}
             hands={hands}
             applyFloor={applyFloor}
+            applyCoHost={applyCoHost}
+            applyTransition={applyTransition}
             applyAir={applyAir}
             schedule={schedule}
             applySchedule={applySchedule}
@@ -966,6 +991,11 @@ function Station({ route: requested, session }: { route: Route; session: AdminSe
 
       {/* Owned imperatively: React never sets currentTime or calls play(). */}
       <audio ref={audioRef} preload="auto" />
+      {/*
+        The other deck. Silent except during a transition, when it carries
+        whichever record is fading — which is as often this one as the first.
+      */}
+      <audio ref={secondRef} preload="auto" />
     </div>
   )
 }

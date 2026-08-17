@@ -2,19 +2,25 @@
  * What goes out, and to whom.
  *
  * One assertion in this file matters more than the rest of it put together:
- * **the room bus carries the guest and the guest bus does not.** That is
+ * **the room bus carries a voice and that voice's own bus does not.** That is
  * mix-minus, and it is the difference between a call-in and a person hearing
  * their own voice half a second late, which is a well-documented way of making
  * somebody unable to finish a sentence.
  *
- * It is also invisible from every angle except the guest's. The console sees a
- * healthy connection, the room hears the guest perfectly, and the only person
- * who knows anything is wrong is the one who cannot say so. So it is pinned
- * here, on the graph, rather than left to be noticed.
+ * It is also invisible from every angle except the speaker's. The console sees
+ * a healthy connection, the room hears them perfectly, and the only person who
+ * knows anything is wrong is the one who cannot say so. So it is pinned here,
+ * on the graph, rather than left to be noticed.
  *
- * The rest is the property C2 exists for: the bus is not the microphone. It is
- * there before anybody has granted a microphone, and it survives a rig being
- * torn down and rebuilt, which is what changing input device does.
+ * With a co-host there can be two people up at once, which turns one assertion
+ * into three: each of them reaches the room, each of them reaches the *other*,
+ * and neither reaches themselves. A shared minus-bus would pass the first and
+ * fail the second, and the failure is a three-way conversation where two of the
+ * three are talking past each other.
+ *
+ * The rest is the property this object exists for: the bus is not the
+ * microphone. It is there before anybody has granted one, and it survives a rig
+ * being torn down and rebuilt, which is what changing input device does.
  */
 import { beforeEach, describe, expect, it } from 'vitest'
 import { airMixer, guestBus } from '../src/lib/mixer.js'
@@ -127,20 +133,22 @@ function reaches(from: FakeNode, to: FakeNode): boolean {
 }
 
 /**
- * The fader between the most recent guest and `to`.
+ * The fader between a given voice's source and `to`.
  *
- * Selected through the guest source rather than by asking which gain reaches
- * the room, because the talk input reaches the room as well — that is the whole
+ * Selected through the source rather than by asking which gain reaches the
+ * room, because the talk input reaches the room as well — that is the whole
  * design — and picking the first gain that did would silently assert about
- * whoever runs the decks instead of about the caller.
+ * whoever runs the decks instead of about the person who called in.
  */
-function faderTo(to: FakeNode): FakeGain | undefined {
-  const source = context.sources.at(-1)
+function faderTo(to: FakeNode, source = context.sources.at(-1)): FakeGain | undefined {
   if (!source) return undefined
   return context.gains.find(
     (gain) => source.outputs.includes(gain) && gain.outputs.includes(to),
   )
 }
+
+/** The seat bus built for an id, by the order they were asked for. */
+const seatBus = (index: number) => context.destinations[index + 1]!
 
 beforeEach(() => {
   context = new FakeContext()
@@ -159,21 +167,42 @@ describe('the buses', () => {
     const mixer = build()
 
     // The whole reason this is not part of `useMicInput` any more. There is
-    // something to send from the moment the console builds a graph, so a guest
+    // something to send from the moment the console builds a graph, so somebody
     // can be on air through a console that never granted a microphone.
     expect(mixer.roomTrack).not.toBeNull()
-    expect(mixer.guestTrack).not.toBeNull()
-    expect(mixer.roomTrack).not.toBe(mixer.guestTrack)
+    expect(mixer.seatTrack(7)).not.toBeNull()
+    expect(mixer.roomTrack).not.toBe(mixer.seatTrack(7))
   })
 
-  it('carry whoever runs the decks to the room and to the guest', () => {
+  it('builds a minus-bus per voice, once each', () => {
     const mixer = build()
-    const [room, guest] = context.destinations
 
-    // A guest who could not hear the person interviewing them would have
-    // nothing to answer, so the talk input goes to both.
+    const first = mixer.seatTrack(7)
+    expect(mixer.seatTrack(7)).toBe(first)
+    expect(mixer.seatTrack(9)).not.toBe(first)
+    // The room bus, plus one each.
+    expect(context.destinations).toHaveLength(3)
+  })
+
+  it('can be asked for a seat before there is anybody on it', () => {
+    // The ordinary order of things: the console offers a connection, and the
+    // track it offers has to exist before there is anything coming back on it.
+    const mixer = build()
+    expect(mixer.seatTrack(7)).not.toBeNull()
+    expect(() => mixer.hear(7, stream())).not.toThrow()
+  })
+
+  it('carry whoever runs the decks to the room and to everybody up', () => {
+    const mixer = build()
+    mixer.seatTrack(7)
+    mixer.seatTrack(9)
+    const [room] = context.destinations
+
+    // Somebody who could not hear the person interviewing them would have
+    // nothing to answer, so the talk input goes to all of them.
     expect(reaches(mixer.talkIn as unknown as FakeNode, room!)).toBe(true)
-    expect(reaches(mixer.talkIn as unknown as FakeNode, guest!)).toBe(true)
+    expect(reaches(mixer.talkIn as unknown as FakeNode, seatBus(0))).toBe(true)
+    expect(reaches(mixer.talkIn as unknown as FakeNode, seatBus(1))).toBe(true)
   })
 
   it('falls back to silence rather than throwing on a browser without them', () => {
@@ -183,32 +212,61 @@ describe('the buses', () => {
     // Worse, and still a console: every control it has except the ones that
     // would have made sound. The same honest failure `stationAudio` takes.
     expect(mixer.roomTrack).toBeNull()
+    expect(mixer.seatTrack(7)).toBeNull()
     expect(mixer.context).toBeNull()
-    expect(() => mixer.hear(stream())).not.toThrow()
+    expect(() => mixer.hear(7, stream())).not.toThrow()
   })
 })
 
 describe('mix-minus', () => {
-  it('puts the guest on the room bus and never on the guest bus', () => {
+  it('puts a voice on the room bus and never on their own', () => {
     const mixer = build()
-    const [room, guest] = context.destinations
+    const [room] = context.destinations
+    mixer.seatTrack(7)
 
-    mixer.hear(stream())
-    mixer.air(1)
+    mixer.hear(7, stream())
+    mixer.air(7, 1)
 
     const source = context.sources[0]!
     expect(reaches(source, room!)).toBe(true)
-    // The assertion this whole file is for. A path from here to the guest bus
-    // is the guest hearing themselves about six hundred milliseconds late,
+    // The assertion this whole file is for. A path from here to their own bus
+    // is somebody hearing themselves about six hundred milliseconds late,
     // which is inaudible to everybody who could report it.
-    expect(reaches(source, guest!)).toBe(false)
+    expect(reaches(source, seatBus(0))).toBe(false)
   })
 
-  it('does not put the guest on the air just because they connected', () => {
+  it('lets two people up hear each other and not themselves', () => {
+    // The co-host and a caller. One shared minus-bus would pass the first half
+    // of this and fail the second, and the failure is a conversation in which
+    // the two of them cannot hear each other at all.
+    const mixer = build()
+    mixer.seatTrack(7)
+    mixer.seatTrack(9)
+    mixer.hear(7, stream())
+    mixer.hear(9, stream())
+    const [seven, nine] = context.sources
+
+    expect(reaches(seven!, seatBus(1))).toBe(true)
+    expect(reaches(nine!, seatBus(0))).toBe(true)
+    expect(reaches(seven!, seatBus(0))).toBe(false)
+    expect(reaches(nine!, seatBus(1))).toBe(false)
+  })
+
+  it('wires a voice into a seat that was asked for after they arrived', () => {
+    // Order must not matter: a co-host can be heard before the console has any
+    // reason to ask for a caller's bus, and the caller must still hear them.
+    const mixer = build()
+    mixer.hear(7, stream())
+    mixer.seatTrack(9)
+
+    expect(reaches(context.sources[0]!, seatBus(0))).toBe(true)
+  })
+
+  it('does not put a voice on the air just because they connected', () => {
     const mixer = build()
     const [room] = context.destinations
 
-    mixer.hear(stream())
+    mixer.hear(7, stream())
 
     // Wired, and shut. Somebody put in front of thirty people by a negotiation
     // completing is a decision nobody made.
@@ -221,38 +279,56 @@ describe('mix-minus', () => {
     const mixer = build()
     const [room] = context.destinations
 
-    mixer.air(0.5)
-    mixer.hear(stream())
+    mixer.air(7, 0.5)
+    mixer.hear(7, stream())
 
-    // The console can ride a level between calls, and the guest arrives at it
+    // The console can ride a level between calls, and the voice arrives at it
     // rather than at whatever the graph happened to be built with.
     expect(faderTo(room!)?.gain.value).toBe(0.5)
   })
 
+  it('keeps the two faders apart', () => {
+    const mixer = build()
+    const [room] = context.destinations
+    mixer.hear(7, stream())
+    mixer.hear(9, stream())
+    const [seven, nine] = context.sources
+
+    mixer.air(7, 0.3)
+    mixer.air(9, 0.9)
+
+    // A partner on a phone in a kitchen and a caller on a headset are not the
+    // same volume, and one control would mean fixing either by breaking the
+    // other.
+    expect(faderTo(room!, seven)?.gain.value).toBe(0.3)
+    expect(faderTo(room!, nine)?.gain.value).toBe(0.9)
+  })
+
   it('sends the cue to your headphones and nowhere near the room', () => {
     const mixer = build()
-    const [room, guest] = context.destinations
+    const [room] = context.destinations
+    mixer.seatTrack(7)
 
-    mixer.hear(stream())
-    mixer.cue(true)
+    mixer.hear(7, stream())
+    mixer.cue(7, true)
 
     const cue = faderTo(context.destination)
     expect(cue?.gain.value).toBe(1)
-    // Pre-fade listen: auditioning a caller must not be broadcasting them.
+    // Pre-fade listen: auditioning somebody must not be broadcasting them.
     expect(reaches(cue as unknown as FakeNode, room!)).toBe(false)
-    expect(reaches(cue as unknown as FakeNode, guest!)).toBe(false)
+    expect(reaches(cue as unknown as FakeNode, seatBus(0))).toBe(false)
   })
 
   it('parks the stream on an element, or Chrome never decodes it', () => {
     const mixer = build()
     const voice = stream()
 
-    mixer.hear(voice)
+    mixer.hear(7, voice)
 
     // The failure this prevents is the worst shape one can take: the peer
     // connection is `connected`, the console's health column says "you can hear
-    // them", the guest's own meter is moving — and there is silence. Every
-    // instrument says the call is working except the only one that counts.
+    // them", their own meter is moving — and there is silence. Every instrument
+    // says the call is working except the only one that counts.
     expect(elements[0]?.srcObject).toBe(voice)
     expect(elements[0]?.muted).toBe(true)
     expect(elements[0]?.plays).toBe(1)
@@ -260,31 +336,34 @@ describe('mix-minus', () => {
 
   it('lets the element go when the voice does', () => {
     const mixer = build()
-    mixer.hear(stream())
+    mixer.hear(7, stream())
 
-    mixer.hear(null)
+    mixer.hear(7, null)
 
     expect(elements[0]?.srcObject).toBeNull()
   })
 
-  it('replaces one voice with the next rather than stacking them', () => {
+  it('replaces one voice with the next on the same id rather than stacking them', () => {
     const mixer = build()
 
-    mixer.hear(stream())
-    mixer.hear(stream())
+    mixer.hear(7, stream())
+    mixer.hear(7, stream())
 
-    // A second caller through a console that never let go of the first would
-    // be two people mixed together, one of whom has hung up.
+    // A reconnect through a console that never let go of the first would be two
+    // of the same person mixed together, one of whom has hung up.
     expect(context.sources[0]!.disconnects).toBe(1)
   })
 
-  it('takes the voice away when it is handed a null', () => {
+  it('leaves one voice alone when the other goes', () => {
     const mixer = build()
-    mixer.hear(stream())
+    mixer.hear(7, stream())
+    mixer.hear(9, stream())
 
-    mixer.hear(null)
+    mixer.hear(9, null)
 
-    expect(context.sources[0]!.disconnects).toBe(1)
+    // The caller hung up. The co-host is still talking.
+    expect(context.sources[0]!.disconnects).toBe(0)
+    expect(context.sources[1]!.disconnects).toBe(1)
   })
 })
 
@@ -292,9 +371,9 @@ describe('the faders', () => {
   it('ramp rather than step, at both ends', () => {
     const mixer = build()
     const [room] = context.destinations
-    mixer.hear(stream())
+    mixer.hear(7, stream())
 
-    mixer.air(1)
+    mixer.air(7, 1)
 
     // A step in gain is an audible click, and a click in the middle of a call
     // reads as the station breaking rather than as somebody deciding.
@@ -310,21 +389,21 @@ describe('the faders', () => {
   it('clamps what it is given, because a fader that stops beats one that errors', () => {
     const mixer = build()
     const [room] = context.destinations
-    mixer.hear(stream())
+    mixer.hear(7, stream())
 
-    mixer.air(4)
+    mixer.air(7, 4)
     const air = faderTo(room!)!
     expect(air.gain.value).toBe(1)
 
-    mixer.air(-1)
+    mixer.air(7, -1)
     expect(air.gain.value).toBe(0)
   })
 
   it('cuts faster than it fades', () => {
     const mixer = build()
     const [room] = context.destinations
-    mixer.hear(stream())
-    mixer.air(1)
+    mixer.hear(7, stream())
+    mixer.air(7, 1)
     const air = faderTo(room!)!
     const fade = air.gain.calls.filter(([kind]) => kind === 'ramp').at(-1)!
 
@@ -338,22 +417,37 @@ describe('the faders', () => {
     expect(cut[2]! - 10).toBeLessThan(fade[2]! - 0)
   })
 
-  it('stays cut until somebody puts the guest back', () => {
+  it('cuts everybody, because picking a name is not what you are doing', () => {
     const mixer = build()
     const [room] = context.destinations
-    mixer.hear(stream())
-    mixer.air(1)
+    mixer.hear(7, stream())
+    mixer.hear(9, stream())
+    mixer.air(7, 1)
+    mixer.air(9, 1)
+    const [seven, nine] = context.sources
 
     mixer.cut()
-    // A second caller arriving into a console that had cut the first must not
-    // inherit an open fader from them.
-    mixer.hear(stream())
+
+    expect(faderTo(room!, seven)!.gain.value).toBe(0)
+    expect(faderTo(room!, nine)!.gain.value).toBe(0)
+  })
+
+  it('stays cut until somebody puts them back', () => {
+    const mixer = build()
+    const [room] = context.destinations
+    mixer.hear(7, stream())
+    mixer.air(7, 1)
+
+    mixer.cut()
+    // A reconnect into a console that had cut them must not inherit an open
+    // fader from the connection before it.
+    mixer.hear(7, stream())
 
     expect(faderTo(room!)!.gain.value).toBe(0)
   })
 })
 
-describe('a guest\'s end', () => {
+describe("a guest's end", () => {
   const bus = () => guestBus(context as unknown as AudioContext)
 
   it('is one bus and nothing to mix', () => {
@@ -393,14 +487,17 @@ describe('a guest\'s end', () => {
 })
 
 describe('closing', () => {
-  it('stops both buses and the context with them', () => {
+  it('stops every bus and the context with them', () => {
     const mixer = build()
-    const [room, guest] = context.destinations
+    mixer.seatTrack(7)
+    mixer.seatTrack(9)
+    const [room] = context.destinations
 
     mixer.close()
 
     expect(room!.track.stopped).toBe(1)
-    expect(guest!.track.stopped).toBe(1)
+    expect(seatBus(0).track.stopped).toBe(1)
+    expect(seatBus(1).track.stopped).toBe(1)
     expect(context.closed).toBe(1)
   })
 })

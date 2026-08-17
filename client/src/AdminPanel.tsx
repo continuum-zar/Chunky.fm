@@ -34,6 +34,7 @@ import type {
   AirSnapshot,
   ChatMessage,
   Listener,
+  CoHostSnapshot,
   FloorSnapshot,
   MicSnapshot,
   PlaybackSnapshot,
@@ -42,11 +43,13 @@ import type {
   ScheduledSession,
   SessionKind,
   StateMessage,
+  TransitionSnapshot,
   Track,
 } from './lib/protocol.js'
 import type { AdminSession } from './hooks/useAdminSession.js'
 import { type MicInput, useMicInput } from './hooks/useMicInput.js'
 import type { StationConnection, StationStatus } from './lib/station.js'
+import { MAX_BLEND_MS, coHostLink } from './lib/cohost.js'
 import { type AirMixerHandle, useAirMixer } from './hooks/useAirMixer.js'
 import {
   HEALTH,
@@ -106,6 +109,15 @@ export interface AdminPanelProps {
    */
   floor: FloorSnapshot | null
   /**
+   * Who is co-hosting. Null until the first frame.
+   *
+   * On the socket like the floor beside it, and for the same reason: a co-host
+   * who sat down while this tab was elsewhere still has to appear on it.
+   */
+  coHost: CoHostSnapshot | null
+  /** How long one record overlaps the next. Null until the first frame. */
+  transition: TransitionSnapshot | null
+  /**
    * Who has asked for the mic, oldest first.
    *
    * The one thing on this panel the room is never sent. A raised hand is a
@@ -152,6 +164,10 @@ export interface AdminPanelProps {
   applyMic(snapshot: MicSnapshot): void
   /** Fold in what `POST /api/floor` just answered. See `applyState`. */
   applyFloor(snapshot: FloorSnapshot): void
+  /** Fold in what `POST /api/cohost/seat` just answered. See `applyState`. */
+  applyCoHost(snapshot: CoHostSnapshot): void
+  /** Fold in what `POST /api/transition` just answered. See `applyState`. */
+  applyTransition(snapshot: TransitionSnapshot): void
 }
 
 /**
@@ -189,8 +205,12 @@ export function AdminPanel({
   applySchedule,
   applyMic,
   floor,
+  coHost,
+  transition,
   hands,
   applyFloor,
+  applyCoHost,
+  applyTransition,
 }: AdminPanelProps) {
   const { status: signedIn, api, error: sessionError, signIn, signOut } = session
 
@@ -218,7 +238,11 @@ export function AdminPanel({
       messages={messages}
       mic={mic}
       floor={floor}
+      coHost={coHost}
+      transition={transition}
       hands={hands}
+      applyCoHost={applyCoHost}
+      applyTransition={applyTransition}
       connection={connection}
       me={me}
       deaf={deaf}
@@ -311,7 +335,11 @@ interface ControlsProps {
   messages: ChatMessage[]
   mic: MicSnapshot | null
   floor: FloorSnapshot | null
+  coHost: CoHostSnapshot | null
+  transition: TransitionSnapshot | null
   hands: Listener[]
+  applyCoHost(snapshot: CoHostSnapshot): void
+  applyTransition(snapshot: TransitionSnapshot): void
   connection: StationConnection | null
   me: number | null
   /**
@@ -346,7 +374,11 @@ function Controls({
   messages,
   mic,
   floor,
+  coHost,
+  transition,
   hands,
+  applyCoHost,
+  applyTransition,
   connection,
   me,
   deaf,
@@ -669,6 +701,7 @@ function Controls({
             subscribe={subscribe}
             mixer={mixer}
             floor={floor}
+            coHost={coHost}
             onCut={cut}
             onOpen={openMic}
             onClose={closeMic}
@@ -683,6 +716,19 @@ function Controls({
             air={air}
             onBringUp={bringUp}
             onStandDown={standDown}
+          />
+          {/* And beside it, the other person who can be on the air: not a
+              listener you brought up for a minute but somebody running half of
+              the night from a phone. Same column because it is the same
+              question — whose voice is going out — and its own card because
+              everything about how they got there is different. */}
+          <CoHostCard
+            api={api}
+            coHost={coHost}
+            transition={transition}
+            busy={busy}
+            onStandDown={() => run(async () => applyCoHost(await api.dropCoHost()))}
+            onBlend={(blendMs) => run(async () => applyTransition(await api.blend(blendMs)))}
           />
           {/* Last in this column, and deliberately. Everything else on the
               panel drives a broadcast that is happening or is about to; this is
@@ -783,6 +829,7 @@ function MicCard({
   subscribe,
   mixer,
   floor,
+  coHost,
   onCut,
   onOpen,
   onClose,
@@ -810,6 +857,8 @@ function MicCard({
   mixer: AirMixerHandle
   /** Who else is talking, which is the other reason the mesh comes up. */
   floor: FloorSnapshot | null
+  /** And who is co-hosting, who is the other person sending a voice up here. */
+  coHost: CoHostSnapshot | null
   /** Take the guest off the air now, and stand them down. See `cut`. */
   onCut(): void
   onOpen(): void
@@ -886,6 +935,89 @@ function MicCard({
    * connection.
    */
   const [guestAir, setGuestAir] = useState(1)
+  /**
+   * The same, for the co-host.
+   *
+   * Its own number rather than one fader for both, because they are two people
+   * on two devices: a partner on a phone in a kitchen and a caller on a headset
+   * are not the same volume, and one control would mean fixing either of them
+   * by breaking the other.
+   */
+  const [coHostAir, setCoHostAir] = useState(1)
+
+  /**
+   * Everybody who should be sending a voice up to this console.
+   *
+   * Two routes into the same list, and they could not be more different: one
+   * was invited after asking, one arrived holding a key and sat down. From here
+   * they are the same thing — a second connection to somebody already on the
+   * roster, going the other way — which is exactly why the hook takes a list
+   * rather than a floor and a seat.
+   */
+  const voices = useMemo(
+    () =>
+      [floor?.speaker?.id, coHost?.seat?.id].filter(
+        (id): id is number => typeof id === 'number',
+      ),
+    [floor?.speaker?.id, coHost?.seat?.id],
+  )
+
+  /**
+   * Every voice arriving, kept, so it can be put in a mixer built afterwards.
+   *
+   * A stream arrives exactly once — `ontrack` fires when the negotiation
+   * completes and never again — so anything not connected at that instant is
+   * lost for the rest of the call. Until there was a co-host that could not
+   * happen: a guest is *invited*, and inviting one is a click that builds the
+   * mixer before the offer even goes out.
+   *
+   * A co-host seats themselves. Nothing on this console decides when, so their
+   * voice can and does arrive before whoever runs the decks has opened a
+   * microphone — and the failure is the worst shape one can take, because every
+   * instrument says the call is fine: the connection is `connected`, the
+   * console's own health column says *you can hear them*, their meter is moving
+   * on their phone, and the room hears silence.
+   */
+  const heldVoices = useRef(new Map<number, MediaStream>())
+
+  /**
+   * Put whatever has already arrived into a mixer that has just been built.
+   *
+   * The other half of `heldVoices`. Also covers the reverse order, which is the
+   * ordinary one: a mixer that already existed when the voice turned up simply
+   * re-applies the same stream, and `hear` replaces a source with itself.
+   */
+  useEffect(() => {
+    const engine = mixer.mixer
+    if (!engine) return
+    for (const [id, stream] of heldVoices.current) engine.hear(id, stream)
+  }, [mixer.mixer])
+
+  /**
+   * A seat taken is a reason to build the buses, whether or not the microphone
+   * is open.
+   *
+   * A co-host can be the only person talking all evening — whoever runs the
+   * decks may never open their own mic — and without this the room would have
+   * no bus to hear them on. `ensure` is safe to call again and cheap after the
+   * first time.
+   *
+   * Outside a gesture, which is the one thing that is not ideal: a context
+   * built here starts suspended, and only a gesture may resume one. It is still
+   * strictly better than no context at all — every other control on this panel
+   * is a click, so one usually arrives within seconds — and `resume` is called
+   * from all of them.
+   */
+  useEffect(() => {
+    if (voices.length === 0) return
+    mixer.ensure()?.resume()
+  }, [voices.length, mixer])
+
+  /** Which fader belongs to which of them. */
+  const levelFor = useCallback(
+    (id: number) => (id === coHost?.seat?.id ? coHostAir : guestAir),
+    [coHost?.seat?.id, coHostAir, guestAir],
+  )
 
   const broadcast = useVoiceBroadcast({
     connection,
@@ -897,34 +1029,53 @@ function MicCard({
     track: sending ? mixer.roomTrack : null,
     targets,
     iceServers,
-    guestTrack: mixer.guestTrack,
-    speaker: floor?.speaker?.id ?? null,
+    // A bus per voice, asked for by id at the moment there is an id to ask
+    // about. Two people can be up at once — a co-host and a caller — and one
+    // shared minus-bus would leave each of them unable to hear the other.
+    seatTrack: useCallback(
+      (id: number) => mixer.mixer?.seatTrack(id) ?? null,
+      [mixer.mixer],
+    ),
+    voices,
     // Straight into the mixer, which wires them to your headphones and to the
     // room bus behind a fader that is shut. Wired and silent: somebody put in
     // front of thirty people by a negotiation completing would be a decision
     // nobody made.
-    onGuest: useCallback((stream: MediaStream | null) => mixer.mixer?.hear(stream), [mixer.mixer]),
+    //
+    // Remembered as well as applied, and that is not belt-and-braces — see
+    // `heldVoices`, and the reason a co-host can arrive before there is a mixer
+    // to put them in.
+    onVoice: useCallback(
+      (id: number, stream: MediaStream | null) => {
+        if (stream === null) heldVoices.current.delete(id)
+        else heldVoices.current.set(id, stream)
+        mixer.mixer?.hear(id, stream)
+      },
+      [mixer.mixer],
+    ),
     // The level is this card's; *when* it is applied is the hook's, because
-    // only that knows whether the guest has been swapped onto the bus that does
+    // only that knows whether the voice has been swapped onto the bus that does
     // not carry them yet. See the talk-channel effect.
     onAir: useCallback(
-      (level: number) => mixer.mixer?.air(level === 0 ? 0 : guestAir),
-      [mixer.mixer, guestAir],
+      (id: number, level: number) => mixer.mixer?.air(id, level === 0 ? 0 : levelFor(id)),
+      [mixer.mixer, levelFor],
     ),
   })
 
-  // Riding the fader while somebody is up. Only while they are: a level set
+  // Riding the faders while somebody is up. Only while they are: a level set
   // between calls is remembered by the mixer and applied to the next one.
   useEffect(() => {
-    if (floor?.speaker && broadcast.guest === 'connected') mixer.mixer?.air(guestAir)
-  }, [guestAir, floor?.speaker, broadcast.guest, mixer.mixer])
+    for (const id of voices) {
+      if (broadcast.voices.get(id) === 'connected') mixer.mixer?.air(id, levelFor(id))
+    }
+  }, [voices, broadcast.voices, mixer.mixer, levelFor])
 
-  // Follow the button, and re-apply whenever a voice arrives: `hear` builds the
-  // guest half of the graph on the first call, so a cue set before there was
+  // Follow the button, and re-apply whenever a voice arrives: `hear` builds a
+  // voice's half of the graph on the first call, so a cue set before there was
   // anybody to apply it to has to be applied to them when they turn up.
   useEffect(() => {
-    mixer.mixer?.cue(cueing)
-  }, [cueing, mixer.mixer, broadcast.guest])
+    for (const id of voices) mixer.mixer?.cue(id, cueing)
+  }, [cueing, voices, mixer.mixer, broadcast.voices])
 
 
   useEffect(() => subscribe(broadcast.handleMessage), [subscribe, broadcast.handleMessage])
@@ -1193,11 +1344,27 @@ function MicCard({
       {floor?.speaker && (
         <GuestLink
           nickname={floor.speaker.nickname}
-          state={broadcast.guest}
+          state={broadcast.voices.get(floor.speaker.id) ?? null}
           cueing={cueing}
           onCue={setCueing}
           air={guestAir}
           onAir={setGuestAir}
+          onCut={onCut}
+        />
+      )}
+
+      {/* And the co-host, on their own row with their own fader. Shown with
+          the same controls because from the mixer's side they are the same
+          thing, and named differently because from the room's side they are
+          not: one was invited for a minute, the other is here all evening. */}
+      {coHost?.seat && (
+        <GuestLink
+          nickname={`${coHost.seat.nickname} (co-host)`}
+          state={broadcast.voices.get(coHost.seat.id) ?? null}
+          cueing={cueing}
+          onCue={setCueing}
+          air={coHostAir}
+          onAir={setCoHostAir}
           onCut={onCut}
         />
       )}
@@ -2061,6 +2228,180 @@ function ShareInvite({ api }: { api: AdminApi }) {
         </p>
       )}
     </div>
+  )
+}
+
+/**
+ * The other person at the decks.
+ *
+ * Two things in one card, and they belong together because they are the same
+ * decision from two sides: who is helping run tonight, and how the records they
+ * line up turn into each other.
+ *
+ * The link is always shown, not only copied, for the reason the invite's is:
+ * sharing and clipboard access both need a secure context, so on a LAN address
+ * over plain HTTP neither exists, and even where they do, seeing what you are
+ * about to send somebody is worth more than a button claiming it worked.
+ *
+ * The crossfade slider lives here rather than beside the transport, and that is
+ * a claim about who reaches for it. It is set once at the start of an evening
+ * to suit the music, not ridden between records, and the person most likely to
+ * change it is the one watching the queue — which is the co-host, who has the
+ * same slider on their phone.
+ */
+function CoHostCard({
+  api,
+  coHost,
+  transition,
+  busy,
+  onStandDown,
+  onBlend,
+}: {
+  api: AdminApi
+  coHost: CoHostSnapshot | null
+  transition: TransitionSnapshot | null
+  busy: boolean
+  onStandDown(): void
+  onBlend(blendMs: number): void
+}) {
+  const [link, setLink] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  // What the slider shows while it is being dragged. The station's value is the
+  // truth, but a fader that only moved when the round trip landed would feel
+  // broken under the hand. Same trick as the duck's.
+  const [draft, setDraft] = useState<number | null>(null)
+  const seat = coHost?.seat ?? null
+  const blendMs = draft ?? transition?.blendMs ?? 0
+
+  async function copy(url: string) {
+    try {
+      await navigator.clipboard.writeText(url)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 2_000)
+    } catch {
+      // No clipboard here: an insecure origin, or permission refused. The link
+      // is on screen either way, which is the fallback that always works.
+      setCopied(false)
+    }
+  }
+
+  async function share() {
+    setError(null)
+    try {
+      const { key } = await api.coHostKey()
+      const url = coHostLink(window.location.origin, key)
+      setLink(url)
+
+      // The native sheet where there is one: this link is going to a phone, so
+      // on a phone this is the whole gesture. A cancelled share is a decision,
+      // not a failure, so it does not fall through to the clipboard.
+      if (navigator.share) {
+        try {
+          await navigator.share({ title: 'chunky.fm — co-host', url })
+          return
+        } catch (err) {
+          if (err instanceof Error && err.name === 'AbortError') return
+        }
+      }
+      await copy(url)
+    } catch {
+      setError('could not fetch the co-host link')
+    }
+  }
+
+  return (
+    <section className="card card--cohost" data-testid="cohost-card">
+      <h2 className="card__title">Co-host</h2>
+
+      {seat ? (
+        <div className="cohost__seated" data-testid="cohost-seated">
+          <span className="cohost__who">{seat.nickname} is co-hosting</span>
+          <button
+            type="button"
+            className="button button--quiet"
+            data-testid="cohost-stand-down"
+            disabled={busy}
+            onClick={onStandDown}
+          >
+            Stand down
+          </button>
+        </div>
+      ) : (
+        <p className="card__empty" data-testid="cohost-empty">
+          Nobody is co-hosting. Send the link and they can talk, queue records
+          and take the transitions from their phone.
+        </p>
+      )}
+
+      <div className="invite">
+        <button
+          type="button"
+          className="button"
+          data-testid="cohost-share"
+          onClick={() => void share()}
+        >
+          {copied ? 'Copied' : 'Send the co-host link'}
+        </button>
+
+        {error && <p className="console__note">{error}</p>}
+
+        {link !== null && (
+          <div className="invite__link">
+            <input
+              className="invite__url"
+              data-testid="cohost-link"
+              readOnly
+              value={link}
+              aria-label="Co-host link"
+              onFocus={(event) => event.currentTarget.select()}
+            />
+            <button type="button" className="button button--quiet" onClick={() => void copy(link)}>
+              Copy
+            </button>
+          </div>
+        )}
+
+        {link !== null && (
+          <p className="invite__note">
+            This link is not the station password. Whoever holds it can talk,
+            queue and move the current record along — and cannot end the night,
+            upload anything or mute anybody. Set CO_HOST_KEY to rotate it on its
+            own; changing ADMIN_PASSWORD rotates it too.
+          </p>
+        )}
+      </div>
+
+      <label className="mic__duck">
+        <span className="mic__duck-label">
+          Crossfade
+          <em data-testid="cohost-blend">
+            {blendMs === 0 ? 'straight cut' : `${(blendMs / 1000).toFixed(1)}s`}
+          </em>
+        </span>
+        <input
+          type="range"
+          data-testid="cohost-blend-slider"
+          min={0}
+          max={MAX_BLEND_MS}
+          step={250}
+          value={blendMs}
+          onChange={(event) => setDraft(Number(event.target.value))}
+          onPointerUp={() => {
+            if (draft !== null) onBlend(draft)
+            setDraft(null)
+          }}
+          onKeyUp={() => {
+            if (draft !== null) onBlend(draft)
+            setDraft(null)
+          }}
+          onBlur={() => {
+            if (draft !== null) onBlend(draft)
+            setDraft(null)
+          }}
+        />
+      </label>
+    </section>
   )
 }
 

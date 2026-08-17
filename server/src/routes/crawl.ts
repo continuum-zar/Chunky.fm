@@ -62,6 +62,10 @@ function robots(base: string): string {
     'Disallow: /api/',
     'Disallow: /listen',
     'Disallow: /admin',
+    // A co-host link is a credential, and a page that advertised itself would
+    // be inviting somebody to go looking for one. The document says the same
+    // thing in a `noindex` of its own; this is the half a crawler reads first.
+    'Disallow: /cohost',
     '',
     `Sitemap: ${base}/sitemap.xml`,
     '',

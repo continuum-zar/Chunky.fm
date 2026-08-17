@@ -5,6 +5,7 @@ import { mergePlays } from '../lib/history.js'
 import type {
   AirSnapshot,
   ChatMessage,
+  CoHostSnapshot,
   FloorSnapshot,
   Listener,
   MicSnapshot,
@@ -15,6 +16,7 @@ import type {
   ServerMessage,
   SocketRefusal,
   StateMessage,
+  TransitionSnapshot,
   Wish,
 } from '../lib/protocol.js'
 import { StationConnection, type StationStatus } from '../lib/station.js'
@@ -94,6 +96,25 @@ export interface Station {
    */
   floor: FloorSnapshot | null
   /**
+   * Who is co-hosting, and since when. Null until the first `cohost` frame,
+   * which arrives in the connect burst right after `floor`.
+   *
+   * Beside the floor rather than folded into it, because a co-host is not a
+   * guest: they arrived holding a key, they seated themselves, and releasing
+   * their talk button does not stand them down. The two can be occupied at
+   * once — a co-host and a caller — which is the shape a shared field could not
+   * carry. See the server's `cohost.ts`.
+   */
+  coHost: CoHostSnapshot | null
+  /**
+   * How long one record overlaps the next, in ms, and zero for a hard cut.
+   *
+   * Null until the first `transition` frame, which arrives right before the
+   * music for the reason `mic` does: a page told what is on without being told
+   * how long a transition runs would play the first one of the evening as a cut.
+   */
+  transition: TransitionSnapshot | null
+  /**
    * Who has asked for the mic. Only ever populated on a console.
    *
    * Empty on every other page, and not because the client filters it: the
@@ -172,6 +193,15 @@ export interface Station {
   applyMic(snapshot: MicSnapshot): void
   /** Fold in what `POST /api/floor` just answered. See `applyState`. */
   applyFloor(snapshot: FloorSnapshot): void
+  /** Fold in what `POST /api/cohost/seat` just answered. See `applyState`. */
+  applyCoHost(snapshot: CoHostSnapshot): void
+  /**
+   * Fold in what `POST /api/transition` just answered. See `applyState`.
+   *
+   * Earns it the way `applyMic` does: this is a slider under somebody's thumb,
+   * and one that only moved when the round trip landed would feel broken.
+   */
+  applyTransition(snapshot: TransitionSnapshot): void
 }
 
 /** Holds the websocket open and tracks the station's broadcast state. */
@@ -197,6 +227,8 @@ export function useStation(
   const [schedule, setSchedule] = useState<ScheduledSession | null>(null)
   const [mic, setMic] = useState<MicSnapshot | null>(null)
   const [floor, setFloor] = useState<FloorSnapshot | null>(null)
+  const [coHost, setCoHost] = useState<CoHostSnapshot | null>(null)
+  const [transition, setTransition] = useState<TransitionSnapshot | null>(null)
   const [hands, setHands] = useState<Listener[]>([])
   const [queue, setQueue] = useState<QueueEntry[] | null>(null)
   const [listeners, setListeners] = useState<Listener[] | null>(null)
@@ -227,6 +259,10 @@ export function useStation(
     // is a list of decisions nobody can act on.
     setFloor(null)
     setHands([])
+    // And its own answer to who is co-hosting it, and to how it moves from one
+    // record to the next.
+    setCoHost(null)
+    setTransition(null)
     // A new socket is a new row in the roster, so whatever this page was called
     // on the last one says nothing about what it is called on this one, and
     // nothing about what it presented on the way in.
@@ -254,6 +290,8 @@ export function useStation(
         if (message.type === 'floor') {
           setFloor({ speaker: message.speaker, invited: message.invited })
         }
+        if (message.type === 'cohost') setCoHost({ seat: message.seat })
+        if (message.type === 'transition') setTransition({ blendMs: message.blendMs })
         if (message.type === 'hands') setHands(message.hands)
         if (message.type === 'queue') setQueue(message.entries)
         if (message.type === 'presence') {
@@ -309,6 +347,11 @@ export function useStation(
   const applySchedule = useCallback((next: ScheduledSession | null) => setSchedule(next), [])
   const applyMic = useCallback((snapshot: MicSnapshot) => setMic(snapshot), [])
   const applyFloor = useCallback((snapshot: FloorSnapshot) => setFloor(snapshot), [])
+  const applyCoHost = useCallback((snapshot: CoHostSnapshot) => setCoHost(snapshot), [])
+  const applyTransition = useCallback(
+    (snapshot: TransitionSnapshot) => setTransition(snapshot),
+    [],
+  )
   const clearSocketError = useCallback(() => setSocketError(null), [])
 
   return {
@@ -321,6 +364,8 @@ export function useStation(
     schedule,
     mic,
     floor,
+    coHost,
+    transition,
     hands,
     queue,
     listeners,
@@ -338,5 +383,7 @@ export function useStation(
     applySchedule,
     applyMic,
     applyFloor,
+    applyCoHost,
+    applyTransition,
   }
 }

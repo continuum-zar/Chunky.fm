@@ -1,5 +1,6 @@
 import type { AirSnapshot } from './air.js'
 import { type ChatMessage, MESSAGE_MAX_LENGTH, normalizeMessageText } from './chat.js'
+import type { CoHostSnapshot } from './cohost.js'
 import type { FloorSnapshot } from './floor.js'
 import type { Play } from './history.js'
 import type { MicSnapshot } from './mic.js'
@@ -7,6 +8,7 @@ import type { PlaybackSnapshot } from './playback.js'
 import { type Listener, normalizeNickname } from './presence.js'
 import type { QueueEntry } from './queue.js'
 import type { ScheduledSession } from './schedule.js'
+import type { TransitionSnapshot } from './transition.js'
 import { type Wish, WISH_MAX_LENGTH, normalizeWishText } from './wishes.js'
 
 /**
@@ -146,6 +148,38 @@ export type MicMessage = MicSnapshot & { type: 'mic' }
  * this feature is `hands`, which is a different frame with a different audience.
  */
 export type FloorMessage = FloorSnapshot & { type: 'floor' }
+
+/**
+ * Who is co-hosting. Sent on connect and on every change.
+ *
+ * The third of the frames about voices, and it is not either of the other two.
+ * `floor` is a listener the decks brought up, which is a favour granted and
+ * revocable. This is somebody who arrived holding a key: they seated
+ * themselves, they queue records, and releasing the talk button does not stand
+ * them down. See `CoHost`, which explains at length why the two are not one
+ * object.
+ *
+ * Broadcast to the whole room rather than to the console. The room hears this
+ * person for the rest of the evening and is owed their name, the same way it is
+ * owed a guest's; and the console reads the id off it to know which socket to
+ * offer a microphone to.
+ */
+export type CoHostMessage = CoHostSnapshot & { type: 'cohost' }
+
+/**
+ * How long two records overlap. Sent on connect and whenever it moves.
+ *
+ * Carried whether or not anything is playing, for the reason `duckTo` is
+ * carried whether or not the mic is open: a page always knows how to run the
+ * next transition before it is asked to, and the co-host's slider has something
+ * to show before the first one.
+ *
+ * A number, and the whole of the crossfade on the wire. What actually fades is
+ * two gain nodes in every listener's browser, against the two instants on the
+ * playback snapshot — the station carries no more of the transition than it
+ * carries of the music. See `Transition`.
+ */
+export type TransitionMessage = TransitionSnapshot & { type: 'transition' }
 
 /**
  * Who has asked for the mic. To the decks, and to nobody else.
@@ -377,6 +411,8 @@ export type ServerMessage =
   | ScheduleMessage
   | MicMessage
   | FloorMessage
+  | CoHostMessage
+  | TransitionMessage
   | HandsMessage
   | QueueMessage
   | PresenceMessage
@@ -546,6 +582,14 @@ export function micMessage(snapshot: MicSnapshot): MicMessage {
 
 export function floorMessage(snapshot: FloorSnapshot): FloorMessage {
   return { type: 'floor', ...snapshot }
+}
+
+export function coHostMessage(snapshot: CoHostSnapshot): CoHostMessage {
+  return { type: 'cohost', ...snapshot }
+}
+
+export function transitionMessage(snapshot: TransitionSnapshot): TransitionMessage {
+  return { type: 'transition', ...snapshot }
 }
 
 export function handsMessage(hands: Listener[]): HandsMessage {

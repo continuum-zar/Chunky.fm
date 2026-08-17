@@ -64,6 +64,26 @@ export const MIC_LEASE_MS = 10_000
  */
 export const MIC_HURRY_MS = 6_000
 
+/**
+ * Who is holding the mic open.
+ *
+ * The mic used to be a boolean with one lease on it, which was exactly right
+ * while there was one person who could talk. A co-host makes two, both working
+ * a push-to-talk button, and a boolean cannot hold that: the co-host finishing
+ * a sentence would un-duck the room in the middle of one the decks were still
+ * saying, because `close` meant *shut* rather than *I have stopped*.
+ *
+ * So the mic is open while **anybody** is holding it, and each holder has its
+ * own lease. Everything on the wire is unchanged — the room is still told a
+ * `live` and a `duckTo`, because how far the music sits down is not a function
+ * of how many people are talking over it — and every existing caller still
+ * means the decks, which is what the default on every verb below is for.
+ */
+export type MicHolder = 'decks' | 'cohost'
+
+/** What a caller that does not say means. See `MicHolder`. */
+const DECKS: MicHolder = 'decks'
+
 export interface MicSnapshot {
   live: boolean
   /**
@@ -101,11 +121,17 @@ export declare interface Mic {
 export class Mic extends EventEmitter {
   readonly #now: () => number
   readonly #leaseMs: number
-  #live = false
   #duckTo = DEFAULT_DUCK
   #since: number | null = null
-  /** Station-clock ms after which an unrenewed mic is assumed abandoned. */
-  #expiresAt = 0
+  /**
+   * Who is holding the mic open, and until when.
+   *
+   * Station-clock ms per holder, after which that one's grip is assumed
+   * abandoned. Empty is a shut mic — there is no separate `live` flag, because
+   * two pieces of state saying the same thing is two pieces of state that can
+   * disagree, and the one time they would is the one this map exists for.
+   */
+  readonly #holders = new Map<MicHolder, number>()
 
   constructor({ now = Date.now, leaseMs = MIC_LEASE_MS }: MicOptions = {}) {
     super()
@@ -114,20 +140,32 @@ export class Mic extends EventEmitter {
   }
 
   get live(): boolean {
-    return this.#live
+    return this.#holders.size > 0
+  }
+
+  /** Who is holding it open right now. For the tests and the log line. */
+  holders(): MicHolder[] {
+    return [...this.#holders.keys()]
   }
 
   get duckTo(): number {
     return this.#duckTo
   }
 
-  /** When an unrenewed mic lapses. Zero while shut; for the tests and the sweep. */
+  /**
+   * When the mic lapses if nobody renews. Zero while shut.
+   *
+   * The *last* holder to run out, since the mic is open while anybody has it.
+   * For the tests and for reading a log; the sweep works holder by holder.
+   */
   get expiresAt(): number {
-    return this.#live ? this.#expiresAt : 0
+    let latest = 0
+    for (const at of this.#holders.values()) latest = Math.max(latest, at)
+    return latest
   }
 
   snapshot(): MicSnapshot {
-    return { live: this.#live, duckTo: this.#duckTo, since: this.#since }
+    return { live: this.live, duckTo: this.#duckTo, since: this.#since }
   }
 
   /**
@@ -143,10 +181,10 @@ export class Mic extends EventEmitter {
    * `since` is set on the way open and not touched on renewal, so it stays the
    * moment the break began rather than creeping forward with each keep-alive.
    */
-  open(): boolean {
-    this.#expiresAt = this.#now() + this.#leaseMs
-    if (this.#live) return false
-    this.#live = true
+  open(holder: MicHolder = DECKS): boolean {
+    const wasLive = this.live
+    this.#holders.set(holder, this.#now() + this.#leaseMs)
+    if (wasLive) return false
     this.#since = this.#now()
     return this.#changed()
   }
@@ -160,18 +198,42 @@ export class Mic extends EventEmitter {
    * after it shut — the station talking over the music because of a race in its
    * own timing rather than because anyone decided to.
    */
-  renew(): boolean {
-    if (!this.#live) return false
-    this.#expiresAt = this.#now() + this.#leaseMs
+  renew(holder: MicHolder = DECKS): boolean {
+    if (!this.#holders.has(holder)) return false
+    this.#holders.set(holder, this.#now() + this.#leaseMs)
     return true
   }
 
-  /** Shut the mic. Idempotent, for the reason `open` is. */
-  close(): boolean {
-    if (!this.#live) return false
-    this.#live = false
+  /**
+   * Let go. Shuts the mic only when nobody else is still holding it.
+   *
+   * *I have stopped talking*, not *shut the mic*, and the difference is the
+   * whole reason the holders exist. A co-host's push-to-talk sends one of these
+   * at the end of every sentence, and the room must not un-duck under whoever
+   * runs the decks still speaking.
+   *
+   * Idempotent, for the reason `open` is: a hangover timer that fires twice,
+   * or a page that closes on both a key-up and a blur, changes nothing the
+   * second time.
+   */
+  close(holder: MicHolder = DECKS): boolean {
+    if (!this.#holders.delete(holder)) return false
+    if (this.live) return false
     this.#since = null
-    this.#expiresAt = 0
+    return this.#changed()
+  }
+
+  /**
+   * Shut it for everybody, whoever is holding it.
+   *
+   * What a lapsed session does, and the one place the old meaning of `close` is
+   * still wanted: ending a broadcast is not somebody stopping mid-sentence, it
+   * is the room going away.
+   */
+  shut(): boolean {
+    if (!this.live) return false
+    this.#holders.clear()
+    this.#since = null
     return this.#changed()
   }
 
@@ -214,11 +276,12 @@ export class Mic extends EventEmitter {
    * Never extends: a hurry that found a shorter lease already running would be
    * handing time back to a mic that was on its way out.
    */
-  hurry(withinMs: number): boolean {
-    if (!this.#live) return false
+  hurry(withinMs: number, holder: MicHolder = DECKS): boolean {
+    const expiresAt = this.#holders.get(holder)
+    if (expiresAt === undefined) return false
     const soon = this.#now() + withinMs
-    if (soon >= this.#expiresAt) return false
-    this.#expiresAt = soon
+    if (soon >= expiresAt) return false
+    this.#holders.set(holder, soon)
     return true
   }
 
@@ -231,8 +294,19 @@ export class Mic extends EventEmitter {
    * housekeeping.
    */
   sweep(): boolean {
-    if (!this.#live || this.#now() < this.#expiresAt) return false
-    return this.close()
+    const now = this.#now()
+    let dropped = false
+    for (const [holder, expiresAt] of this.#holders) {
+      if (now >= expiresAt) {
+        this.#holders.delete(holder)
+        dropped = true
+      }
+    }
+    // Only when the last one went. A co-host whose phone stopped renewing while
+    // the decks are still talking is one grip lost, not a mic break ending.
+    if (!dropped || this.live) return false
+    this.#since = null
+    return this.#changed()
   }
 
   /**
@@ -246,7 +320,7 @@ export class Mic extends EventEmitter {
    * the setting doing its job.
    */
   clear(): void {
-    this.close()
+    this.shut()
   }
 
   #changed(): boolean {

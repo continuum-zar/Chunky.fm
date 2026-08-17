@@ -2,6 +2,7 @@ import multipart from '@fastify/multipart'
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify'
 import { OnAir } from './air.js'
 import { ChatLog } from './chat.js'
+import { CoHost } from './cohost.js'
 import type { Config } from './config.js'
 import type { Db } from './db.js'
 import { Floor } from './floor.js'
@@ -15,8 +16,9 @@ import { Mutes } from './mutes.js'
 import { Padding } from './padding.js'
 import { PlaybackState } from './playback.js'
 import { type RealtimeHandle, attachRealtime } from './realtime.js'
-import { hasAdminCredentials, mayListen } from './lib/auth.js'
+import { hasAdminCredentials, hasCoHostCredentials, mayListen } from './lib/auth.js'
 import { adminRoutes } from './routes/admin.js'
+import { coHostRoutes } from './routes/cohost.js'
 import { crawlRoutes } from './routes/crawl.js'
 import { floorRoutes } from './routes/floor.js'
 import { micRoutes } from './routes/mic.js'
@@ -33,6 +35,8 @@ import { queueRoutes } from './routes/queue.js'
 import { uploadRoutes } from './routes/upload.js'
 import { wishesRoutes } from './routes/wishes.js'
 import { Station } from './station.js'
+import { Transition } from './transition.js'
+import { transitionRoutes } from './routes/transition.js'
 import { CloudflareTurn } from './turn.js'
 import { Schedule } from './schedule.js'
 import { scheduleRoutes } from './routes/schedule.js'
@@ -55,6 +59,8 @@ declare module 'fastify' {
     mic: Mic
     /** Who, besides the decks, is allowed to talk. See `Floor`. */
     floor: Floor
+    /** Who is co-hosting: the other person at the decks. See `CoHost`. */
+    coHost: CoHost
     /** Heads the decks added to the headcount. See `Padding`. */
     padding: Padding
     lyrics: LyricsService
@@ -82,6 +88,10 @@ export interface BuildAppOptions {
   micLeaseMs?: number
   /** How long an invitation to the mic stands. See `INVITE_TTL_MS`. */
   inviteTtlMs?: number
+  /** How long a co-host seat lasts without a renew. See `SEAT_LEASE_MS`. */
+  seatLeaseMs?: number
+  /** How long two records overlap. See `Transition`. */
+  blendMs?: number
   closeGraceMs?: number
   chatHistoryLimit?: number
   playHistoryLimit?: number
@@ -117,6 +127,8 @@ export async function buildApp({
   micSweepIntervalMs = DEFAULT_MIC_SWEEP_MS,
   micLeaseMs,
   inviteTtlMs,
+  seatLeaseMs,
+  blendMs,
   closeGraceMs,
   chatHistoryLimit,
   playHistoryLimit,
@@ -178,7 +190,12 @@ export async function buildApp({
 
   app.get('/health', async () => ({ ok: true }))
 
-  const station = new Station({ playback, backstopIntervalMs })
+  // How one record becomes the next. Its own object because the number is
+  // broadcast and settable while a set is running, and because it outlives a
+  // session the way the duck depth does: it is a setting belonging to whoever
+  // runs the decks, not a claim about tonight. See `Transition`.
+  const transition = new Transition({ blendMs })
+  const station = new Station({ playback, transition, backstopIntervalMs })
 
   // A session is a stretch of time the station is on air, opened and closed by
   // whoever runs the decks, not a run of the process, which is what it used to
@@ -231,6 +248,14 @@ export async function buildApp({
   // it carries of the music. What it holds is permission. See `Floor`.
   const floor = new Floor({ now: () => playback.now(), inviteTtlMs })
 
+  // The other person at the decks. Holds no audio either — a co-host's voice
+  // goes from their phone to the console and out again on the connections the
+  // room already has — and is deliberately not the floor: a guest is invited
+  // and a co-host arrives holding a key, and a guest coming down ends with the
+  // mic closing while a co-host works a push-to-talk button and must survive
+  // it. See `CoHost`, which says this at length.
+  const coHost = new CoHost({ now: () => playback.now(), leaseMs: seatLeaseMs })
+
   // A console that dies mid-sentence would otherwise leave the whole room
   // listening to a permanently quiet song. See `Mic.sweep`. The floor's one
   // lease — an invitation nobody answered — rides the same interval, because
@@ -239,6 +264,10 @@ export async function buildApp({
   const micSweep = setInterval(() => {
     mic.sweep()
     floor.sweep()
+    // And a seat whose phone went into a tunnel. Same interval and the same
+    // reasoning: all three are leases on somebody being where they said they
+    // were, and none is worth a timer of its own. See `CoHost.sweep`.
+    coHost.sweep()
   }, micSweepIntervalMs)
   micSweep.unref()
 
@@ -305,6 +334,11 @@ export async function buildApp({
     // one of them is a lie applied to another night. See `Floor.clear`.
     mic.clear()
     floor.clear()
+    // And the seat. Who is co-hosting is a claim about tonight, like who is
+    // here and who is talking, and every one of them is a lie applied to
+    // another night. The *key* survives, since it is a credential rather than a
+    // claim and lives in the config. See `CoHost.clear`.
+    coHost.clear()
     // And everything written down during it. Scoping already made all three
     // unreadable; this is about the rows. The chat and the book are free text
     // somebody typed, signed with the name they were using, said to a room that
@@ -333,6 +367,8 @@ export async function buildApp({
   await app.register(scheduleRoutes({ config, schedule }))
   await app.register(micRoutes({ config, mic, air, floor }))
   await app.register(floorRoutes({ config, floor, air }))
+  await app.register(coHostRoutes({ config, coHost, air }))
+  await app.register(transitionRoutes({ config, station }))
   await app.register(rtcRoutes({ config, turn }))
   await app.register(mutesRoutes({ config, mutes }))
   await app.register(paddingRoutes({ config, padding }))
@@ -358,6 +394,7 @@ export async function buildApp({
     schedule,
     mic,
     floor,
+    coHost,
     mutes,
     padding,
     // The socket is the station: refusing it is what makes a private station
@@ -367,6 +404,11 @@ export async function buildApp({
     // asks of an HTTP request, asked of the upgrade that became this socket,
     // and it buys one thing only: the right to offer a listener a voice.
     isAdmin: (headers) => hasAdminCredentials(config, headers),
+    // And which of them are holding a co-host key. Asked of the upgrade for the
+    // reason `isAdmin` is, and it buys as little: the right to *ask* for the
+    // seat, over HTTP, in a request that names this connection. See
+    // `RealtimeOptions.isCoHost`.
+    isCoHost: (headers) => hasCoHostCredentials(config, headers),
     // The console's socket going away is not proof it has gone: renewals ride
     // HTTP, which survives a blip the socket does not. So this shortens the
     // mic's lease rather than ending it, and a console that is only
@@ -401,6 +443,7 @@ export async function buildApp({
   app.decorate('mutes', mutes)
   app.decorate('mic', mic)
   app.decorate('floor', floor)
+  app.decorate('coHost', coHost)
   app.decorate('padding', padding)
   app.decorate('lyrics', lyrics)
 

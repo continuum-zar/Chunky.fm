@@ -22,7 +22,7 @@ RUN npm ci
 # test/ and scripts/ as well as src/, so they all have to be here or tsc fails
 # on files it was told to include but cannot find.
 COPY client/tsconfig.json client/vite.config.ts ./
-COPY client/index.html client/landing.html client/how-it-works.html ./
+COPY client/index.html client/landing.html client/cohost.html client/how-it-works.html ./
 COPY client/src ./src
 COPY client/test ./test
 COPY client/scripts ./scripts

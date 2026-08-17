@@ -81,6 +81,22 @@ export function hashFor(route: Route): string {
  */
 export const STATION_PATH = '/listen'
 
+/**
+ * The co-host's own address.
+ *
+ * A third document rather than a route on the station, and the reason is the
+ * device. The station's bundle carries a globe, a gramophone and three.js; the
+ * console carries the whole desk. Neither is what you want to hand somebody on
+ * a phone in a kitchen who has to press one button in the next four seconds.
+ * So the seat is its own entry with its own bundle, holding only what a co-host
+ * touches — see `cohost.html` and `vite.config.ts`.
+ *
+ * Named here rather than in the co-host page so that `lib/cohost.ts` and the
+ * console's share button, which are the two things that build a link to it,
+ * agree with the three front doors about what the address is.
+ */
+export const CO_HOST_PATH = '/cohost'
+
 /** The address of a route on the station, for a link written from outside it. */
 export function stationUrl(route: Route = DEFAULT_ROUTE): string {
   return `${STATION_PATH}${hashFor(route)}`

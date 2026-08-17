@@ -32,6 +32,15 @@ export interface ClientBundle {
   /** How it works. Vite's `how-it-works.html` entry; prose, and no bundle. */
   how: Buffer
   /**
+   * The co-host's control surface. Vite's `cohost.html` entry.
+   *
+   * Required like the other three rather than optional like the 404 page,
+   * because it is a document with a bundle behind it: a build that shipped
+   * without it would come up healthy and answer a co-host link with a 404,
+   * which is the same class of wrong as shipping without the station.
+   */
+  cohost: Buffer
+  /**
    * What an address that is nothing gets, or null if the build predates it.
    *
    * Optional where the three documents above are required, and for the same
@@ -80,10 +89,11 @@ export async function loadClientBundle(clientDir: string): Promise<ClientBundle>
       )
     }
   }
-  const [index, landing, how] = await Promise.all([
+  const [index, landing, how, cohost] = await Promise.all([
     read('index.html'),
     read('landing.html'),
     read('how-it-works.html'),
+    read('cohost.html'),
   ])
 
   // See `notFound` above for why this one is allowed to be absent.
@@ -109,7 +119,7 @@ export async function loadClientBundle(clientDir: string): Promise<ClientBundle>
     }),
   )
 
-  return { index, landing, how, notFound, root }
+  return { index, landing, how, cohost, notFound, root }
 }
 
 /**
@@ -151,6 +161,9 @@ export function doorwayHook(bundle: ClientBundle) {
         return
       case 'how':
         void sendDocument(reply, bundle.how)
+        return
+      case 'cohost':
+        void sendDocument(reply, bundle.cohost)
         return
       case 'pass':
         return done()

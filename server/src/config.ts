@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto'
 import path from 'node:path'
 
 export interface Config {
@@ -31,6 +32,23 @@ export interface Config {
    * `stationKeyFromEnv`. It is no longer what an unset `STATION_KEY` means.
    */
   stationKey: string | null
+  /**
+   * What a co-host presents to reach their half of the decks.
+   *
+   * A *third* secret, and the reason it is not one of the two above is the
+   * whole point of the seat. The station key admits somebody to listen; the
+   * admin password hands over the station. A co-host is neither: they talk,
+   * they queue, they move the current record along, and they cannot end the
+   * night, empty the library or mute anybody. A credential that granted more
+   * than the seat does would make the seat a fiction.
+   *
+   * Never null, unlike `stationKey`. Absent from the environment it is derived
+   * from the admin password (see `coHostKeyFrom`), so a station always has one
+   * to hand out and rotating ADMIN_PASSWORD rotates it along with everything
+   * else that password stands behind. Set `CO_HOST_KEY` to break that link and
+   * rotate the seat on its own.
+   */
+  coHostKey: string
   maxUploadBytes: number
   /**
    * Where the station asks about lyrics. LRCLIB is public and keyless, so this
@@ -201,6 +219,31 @@ function stationKeyFromEnv(env: NodeJS.ProcessEnv): string | null {
   return env.STATION_KEY?.trim() || null
 }
 
+/**
+ * Domain separation for the derived co-host key. The same label trick
+ * `lib/auth.ts` uses on its two signing keys, and here for a sharper reason:
+ * without it the co-host key would *be* the admin password, printed into a link
+ * and sent to somebody's phone.
+ */
+const CO_HOST_KEY_LABEL = 'chunky.fm/co-host-key/v1'
+
+/**
+ * The co-host key a station comes with when nobody has set one.
+ *
+ * Derived from the admin password rather than generated, so it survives a
+ * restart: a key minted at boot would invalidate the link on the co-host's
+ * phone every time the station was deployed, which is the one moment nobody
+ * wants to be re-sending it. Derived rather than reused, so the link cannot be
+ * walked back to the password.
+ *
+ * Truncated to sixteen characters of base64url — 96 bits, which is far past
+ * anything worth guessing at ten tries a minute, and short enough to fit in a
+ * link somebody reads off a screen.
+ */
+function coHostKeyFrom(adminPassword: string): string {
+  return createHmac('sha256', adminPassword).update(CO_HOST_KEY_LABEL).digest('base64url').slice(0, 16)
+}
+
 const DEFAULT_MAX_UPLOAD_BYTES = 150 * 1024 * 1024
 
 /**
@@ -294,6 +337,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     dbPath: env.DB_PATH ? path.resolve(env.DB_PATH) : path.join(storageDir, 'chunky.sqlite'),
     adminPassword,
     stationKey: stationKeyFromEnv(env),
+    coHostKey: env.CO_HOST_KEY?.trim() || coHostKeyFrom(adminPassword),
     maxUploadBytes: intFromEnv(env.MAX_UPLOAD_BYTES, DEFAULT_MAX_UPLOAD_BYTES, 'MAX_UPLOAD_BYTES'),
     lrclibBaseUrl: env.LRCLIB_BASE_URL?.trim() || 'https://lrclib.net',
     logLevel: env.LOG_LEVEL?.trim() || 'info',

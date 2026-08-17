@@ -96,6 +96,22 @@ export interface MicInput {
   talking: boolean
   /** Open or close what goes out. Ramped; see `talk`. */
   setTalking(talking: boolean): void
+  /**
+   * How loud this microphone goes out, as a linear gain.
+   *
+   * The same node the talk button opens and closes — talking multiplies by
+   * this rather than by one — so there is one fader and not two in series to
+   * disagree with each other.
+   *
+   * One by default, which is what the console has always sent, and which is why
+   * nothing on the console has to know this exists. It is here for a co-host on
+   * a phone, where the microphone is whatever is in the handset and how loud it
+   * arrives is genuinely unpredictable: the same person is quiet held at arm's
+   * length and clipping held to the mouth, and neither is fixable at the far
+   * end after the fact.
+   */
+  level: number
+  setLevel(level: number): void
 }
 
 /** Long enough not to click, short enough not to swallow the first syllable. */
@@ -172,6 +188,7 @@ export function useMicInput(
   const [onSpeakers, setOnSpeakers] = useState(startOnSpeakers)
   const [monitoring, setMonitoring] = useState(false)
   const [talking, setTalking] = useState(false)
+  const [level, setLevel] = useState(1)
 
   const meterRef = useRef<HTMLDivElement | null>(null)
   const rigRef = useRef<Rig | null>(null)
@@ -368,8 +385,12 @@ export function useMicInput(
     const gain = rig.talk.gain
     gain.cancelScheduledValues(now)
     gain.setValueAtTime(gain.value, now)
-    gain.linearRampToValueAtTime(talking ? 1 : 0, now + TALK_RAMP_S)
-  }, [talking, status])
+    // The level and the button on one node. In series they would be two faders
+    // that can disagree, and the disagreement is a microphone that is open and
+    // silent — which is the one failure nobody watching a meter can diagnose,
+    // because the meter is upstream of both.
+    gain.linearRampToValueAtTime(talking ? Math.min(1, Math.max(0, level)) : 0, now + TALK_RAMP_S)
+  }, [talking, level, status])
 
   const open = useCallback(() => {
     setWanted(true)
@@ -409,6 +430,8 @@ export function useMicInput(
     meterRef,
     live: status === 'live',
     talking,
+    level,
+    setLevel,
     open,
     close,
     choose,
