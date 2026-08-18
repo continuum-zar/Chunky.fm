@@ -857,14 +857,6 @@ html {
   box-shadow: inset 0 -1px 0 0 rgb(255 255 255 / 5%);
 }
 
-.moment__tail {
-  margin: 0;
-  max-width: 44ch;
-  color: var(--muted);
-  font-size: 15px;
-  line-height: 1.68;
-}
-
 /* Centred under the table.
  *
  * `fit-content` rather than a width: the meter is a flex row whose bars are
@@ -937,33 +929,6 @@ html {
  * sentences with nothing beside them. No panel, no icon, no numbers.
  */
 
-/* No min-height: the band above and below already gives it a screen to itself,
-   and centring inside a tall box on top of that opened a second gap that read
-   as the page having lost its place. */
-/* The gap between the groups, not between the lines. See the note on `Why` in
-   Landing.tsx. Wide enough that a group reads as one breath and the next one as
-   the answer to it. */
-.why {
-  display: flex;
-  flex-direction: column;
-  gap: 36px;
-  max-width: 900px;
-}
-
-/* And the gap inside a group, which is small: these are lines of one thought
-   broken where it was written, so what separates them is a return rather than a
-   paragraph break.
-
-   Not smaller than this, though. Several of them wrap on a narrow screen, and at
-   4px the space between two lines of one sentence and the space between two
-   sentences were the same: four statements read as six. It has to beat the
-   line-height to be legible as a break at all. */
-.why__stack {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
 /* --- the squiggle ---------------------------------------------------------
  *
  * Aceternity UI's Squiggly Text. The wriggle is five SVG filters swapped on a
@@ -987,7 +952,52 @@ html {
   pointer-events: none;
 }
 
-.why__line {
+/* --- the philosophy ---------------------------------------------------------
+ *
+ * One thought a line, in groups, with the spacing doing the arguing.
+ *
+ * This section used to be the second half of an argument whose first half sat
+ * on the screen above it, and it was set from the right margin to say so: two
+ * adjacent screens of large type in one voice, divided by nothing but the
+ * margin they hung off. There is no screen above it now (see the note on
+ * `Creed` in Landing.tsx — the two were saying the same thing, and this is the
+ * half that said it better), so it runs down the left like every other section.
+ * A single section set from the right would be a distinction with nothing left
+ * to distinguish it from.
+ *
+ * No min-height: the band above and below already gives it a screen to itself,
+ * and centring inside a tall box on top of that opened a second gap that read
+ * as the page having lost its place.
+ *
+ * The gap here is between the groups, not between the lines: wide enough that a
+ * group reads as one breath and the next one as the answer to it.
+ */
+.creed {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 36px;
+  max-width: 900px;
+}
+
+/* And the gap inside a group, which is small: these are lines of one thought
+   broken where it was written, so what separates them is a return rather than a
+   paragraph break.
+
+   Not smaller than this, though. Several of them wrap on a narrow screen, and at
+   4px the space between two lines of one sentence and the space between two
+   sentences were the same: four statements read as six. It has to beat the
+   line-height to be legible as a break at all. */
+.creed__stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* The general claim, and the biggest type on the screen. It is the one line
+   here in the page's own voice rather than the DJ's, which is why it is set
+   above everything under it: the rest of the section is somebody answering it. */
+.creed__claim {
   margin: 0;
   max-width: 26ch;
   color: var(--fg);
@@ -998,91 +1008,9 @@ html {
   text-wrap: balance;
 }
 
-/* The things that are true and are not the complaint. Faint because the section
-   is not arguing with any of them: they are the ground the argument stands on,
-   and set at the same weight as the claim they would read as four more claims. */
-.why__line--quiet {
-  max-width: 34ch;
-  color: var(--faint);
-  font-size: clamp(20px, 2.4vw, 30px);
-  font-weight: 400;
-  letter-spacing: -0.015em;
-  line-height: 1.32;
-}
-
-/* The turn, and the verdict. Between the two: the page's own voice again rather
-   than the faint recital, but not the size of the opening claim, which only one
-   line on this screen gets to be. Wider measure because these are sentences
-   rather than fragments. */
-.why__line--mid {
-  max-width: 40ch;
-  color: var(--fg);
-  font-size: clamp(22px, 2.8vw, 34px);
-  font-weight: 500;
-  letter-spacing: -0.02em;
-  line-height: 1.24;
-}
-
-/* The turn. Set apart by space rather than by colour, because everything above it is
-   the world as it is, and this is the one line that is about the station. */
-.why__turn {
-  margin: 28px 0 0;
-  color: var(--fg);
-  font-size: clamp(28px, 4vw, 46px);
-  font-weight: 600;
-  letter-spacing: -0.03em;
-  line-height: 1.14;
-}
-
-/* --- the philosophy ---------------------------------------------------------
- *
- * The same setting as `.why` above it: one thought a line, in groups, spacing
- * doing the arguing, and deliberately a step quieter at every level. The two
- * sections are one argument in two halves, and this one is the half spoken by a
- * person rather than stated by the page: `.why__line` is the biggest type on the
- * screen and nothing here reaches it.
- */
-
-/* Set from the right margin, the only section on the page that is.
- *
- * `Why` above it runs down the left like everything else, and this answers it
- * from the other side of the band. The page has no other way to say that two
- * adjacent screens of large type in the same voice are two halves of one
- * argument rather than one long one: they are not divided by a rule, a panel or
- * a heading, so the margin they hang off is the whole of the separation.
- *
- * Three declarations and all three are needed. `margin-left: auto` moves the
- * 900px block to the right of the 1080 band; `align-items: flex-end` moves each
- * line to the right of the block, since a flex column would otherwise stretch
- * them all to its full width; `text-align: right` sets the words inside the
- * lines that wrap. Any one alone leaves it looking like a mistake. */
-.creed {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 36px;
-  max-width: 900px;
-  margin-left: auto;
-  text-align: right;
-}
-
-.creed__stack {
-  display: flex;
-  flex-direction: column;
-  /* Right again. The stack is as wide as its longest line, and a shorter line
-     inside it is capped by its own measure; without this it would be laid
-     against the stack's left edge with its text pushed right, which is a ragged
-     edge on both sides and reads as broken rather than as aligned. */
-  align-items: flex-end;
-  /* Same 12px as `.why__stack`, for the same reason: several of these wrap on a
-     narrow screen, and a gap smaller than the line-height stops reading as the
-     break between two sentences. */
-  gap: 12px;
-}
-
-/* The thesis. The largest thing in the section and still under `.why__line`,
-   which is the page's own voice making the general claim; this is the answer to
-   it and answers do not shout. */
+/* The thesis. The largest thing the person says, and still under
+   `.creed__claim`, which is the general claim this is the answer to; answers do
+   not shout. */
 .creed__line {
   max-width: 28ch;
   margin: 0;
@@ -1115,8 +1043,7 @@ html {
 }
 
 /* The one line that is about the station, and the only one at the weight of the
-   thesis. Set apart by space, like `.why__turn`: the section earns this line
-   and then stops. */
+   thesis. Set apart by space: the section earns this line and then stops. */
 .creed__turn {
   margin: 28px 0 0;
   max-width: 28ch;
@@ -1360,10 +1287,9 @@ html {
  * the card is GlareCard.tsx; these are the sizes the steps are set at inside
  * one.
  *
- * Each card is a heading and then the same shape under it: a few fragments, and
- * then the line that says what they were for. Faint and reading-colour
- * respectively, which is the relationship `.why__line--quiet` has to the lines
- * around it, at a fifth of the size.
+ * Each card is a heading and then a few fragments under it. Faint against the
+ * heading's reading colour, which is the relationship `.creed__said--quiet` has
+ * to the lines around it, at a fifth of the size.
  */
 
 .works__row {
@@ -1403,16 +1329,6 @@ html {
   color: var(--faint);
   font-size: 13.5px;
   line-height: 1.52;
-}
-
-/* And the line that says what they were for, in the reading colour so each card
-   lands rather than trailing off. */
-.step__close {
-  margin: 0;
-  color: var(--muted);
-  font-size: 13.5px;
-  line-height: 1.62;
-  text-wrap: pretty;
 }
 
 /* The two example themes on card 01. Quoted, and a shade brighter than the
@@ -1488,42 +1404,211 @@ html {
   text-transform: uppercase;
 }
 
-.guide__notes {
+/* --- the rail --------------------------------------------------------------
+ *
+ * Aceternity UI's Timeline, in this project's materials and at about a third of
+ * its size. The component is Timeline.tsx and the note on it explains why it is
+ * this small; these are the sizes.
+ *
+ * The layout is one grid per note: the rail's own column, then the timestamp,
+ * then what was said. The rail is drawn behind them as a single element rather
+ * than as a border on each note, because it has to run past the gaps as well as
+ * the notes, and a border stops at every one of them.
+ */
+
+.rail {
+  position: relative;
+  width: 100%;
+}
+
+.guide__rail {
+  margin-top: 4px;
+}
+
+.rail__notes {
   display: flex;
   flex-direction: column;
-  gap: 20px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
+  gap: 22px;
 }
 
 /* The timestamp beside the note rather than over it, so the three times make a
-   column that can be read on its own as the shape of a record. */
-.note {
+   column that can be read on its own as the shape of a record.
+
+   rem rather than ch, for the reason in `.room__creed`: this box has no
+   font-size of its own, so a ch here would be measured against 16px while the
+   note beside it is set at 20px. */
+.rail__note {
+  position: relative;
   display: grid;
-  grid-template-columns: 4.5rem minmax(0, 1fr);
+  grid-template-columns: 28px 4.5rem minmax(0, 1fr);
   gap: 8px;
   align-items: baseline;
-  /* rem rather than ch, for the reason in `.room__creed`: this box has no
-     font-size of its own, so a ch here would be measured against 16px while the
-     note beside it is set at 20px. */
   max-width: 48rem;
+}
+
+/* Where the note is on the rail. Filled rather than ringed: a hollow dot on a
+   line reads as a station a train has not reached, and these are not steps in
+   anything, they are places a note happens to sit. */
+.rail__dot {
+  position: relative;
+  z-index: 1;
+  align-self: center;
+  justify-self: start;
+  width: 7px;
+  height: 7px;
+  margin-left: 2px;
+  border-radius: var(--pill);
+  background: var(--muted);
+  /* The rail passes behind the dot, and the dot has to interrupt it or the two
+     read as a line with a bead threaded on rather than a point on a line. */
+  box-shadow: 0 0 0 4px var(--bg);
 }
 
 /* In the numeric face, like every other clock on this page, but not faint, and
    not `aria-hidden`. This one is content. */
-.note__at {
+.rail__at {
   color: var(--fg-soft);
   font-family: var(--font-numeric);
   font-size: clamp(15px, 1.6vw, 18px);
   letter-spacing: 0.02em;
 }
 
-.note__says {
+.rail__says {
   color: var(--fg-dim);
   font-size: clamp(16px, 1.8vw, 20px);
   line-height: 1.5;
   text-wrap: pretty;
+}
+
+/* The rail. Faint for its whole length, and masked to nothing at both ends so
+   it arrives and leaves rather than starting and stopping at a hard edge. */
+.rail__line {
+  position: absolute;
+  top: 0;
+  left: 5px;
+  width: 1px;
+  overflow: hidden;
+  background: rgb(255 255 255 / 12%);
+  mask-image: linear-gradient(to bottom, transparent, black 12%, black 88%, transparent);
+}
+
+/* And the part of it that has been reached. Its height is written by the
+   component from the scroll position; everything else about it is here. */
+.rail__lit {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  background: linear-gradient(to bottom, rgb(255 255 255 / 10%), rgb(255 255 255 / 70%));
+}
+
+/* Asked to hold still: the whole rail, lit, with nothing driving it. */
+.rail__lit--all {
+  height: 100%;
+}
+
+/* --- the beam --------------------------------------------------------------
+ *
+ * Aceternity UI's Tracing Beam. The component is TracingBeam.tsx, which draws
+ * the path twice and slides a gradient down the second one; this is where it
+ * hangs and how wide the strokes are.
+ */
+
+.beam {
+  position: relative;
+  width: 100%;
+}
+
+/* Beside the words rather than among them, and *inside* the section rather than
+ * hanging off it.
+ *
+ * The obvious way to place this is a negative offset into the page's gutter,
+ * which is what the original does with `-left-20`. It cannot work here. The
+ * section is capped at 1080 with a 32px gutter, so on any window between about
+ * 900 and 1100 wide a beam sitting 40px outside the content is drawn at a
+ * negative page coordinate and is simply not there — and the widths where that
+ * happens are ordinary laptop widths, not an edge case.
+ *
+ * So the line sits at the left of the frame and the content is indented past
+ * it. The beam is then inside the section at every width, down to a phone, and
+ * the indent reads as what it is: an argument set in from the margin with a
+ * line drawn beside it. */
+.beam__line {
+  position: absolute;
+  top: 4px;
+  left: 0;
+  display: block;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.beam__path {
+  stroke: rgb(255 255 255 / 10%);
+  stroke-width: 1;
+}
+
+.beam__lit {
+  stroke-width: 1.25;
+}
+
+/* What the section's own layout was before the beam was put around it, plus the
+   indent that makes room for the line. The frame cannot carry either, because
+   the frame also holds the line. */
+.creed__beam .beam__content {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 36px;
+  padding-left: 44px;
+}
+
+@media (max-width: 560px) {
+  .creed__beam .beam__content {
+    padding-left: 32px;
+  }
+}
+
+/* --- the spotlight ---------------------------------------------------------
+ *
+ * Aceternity UI's Spotlight: one blurred ellipse thrown across a section from a
+ * source outside it. The shape is Spotlight.tsx; this is where it falls and how
+ * it arrives.
+ */
+
+.spotlight {
+  position: absolute;
+  z-index: 0;
+  top: -40%;
+  left: -30%;
+  width: 130%;
+  height: 170%;
+  opacity: 0;
+  pointer-events: none;
+  animation: spotlight 2s ease 0.4s 1 forwards;
+}
+
+/* The original's: it swings in from up and left and settles, which is a light
+   being pointed rather than one being switched on. */
+@keyframes spotlight {
+  from {
+    opacity: 0;
+    transform: translate(-8%, -6%) scale(0.72);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate(0, 0) scale(1);
+  }
+}
+
+/* Asked to hold still, the light is simply on. It is the section's only
+   decoration and taking it away entirely would leave the one section that was
+   given something looking like the one that was forgotten. */
+@media (prefers-reduced-motion: reduce) {
+  .spotlight {
+    opacity: 1;
+    animation: none;
+  }
 }
 
 /* --- the room --------------------------------------------------------------
@@ -1575,15 +1660,6 @@ html {
 .room__line--said {
   color: var(--fg);
   font-weight: 500;
-}
-
-/* The thing somebody says, quoted: the same treatment a wish gets further down
-   the page, because it is the same kind of object: a sentence a listener typed. */
-.room__quote {
-  margin: 0;
-  color: var(--fg-soft);
-  font-size: clamp(19px, 2.2vw, 26px);
-  line-height: 1.3;
 }
 
 .room__reveal {
@@ -2011,12 +2087,30 @@ html {
  * order and would need reading again.
  */
 
+/* `relative` and `isolate` for the light: the spotlight is positioned against
+   this section and everything in it has to sit above the light rather than
+   under it. `isolate` keeps that stacking to this section instead of putting
+   the section into a contest with the rest of the page.
+
+   Not `overflow: hidden`. The light is deliberately bigger than the section and
+   is meant to spill past its top and its left, the way a light thrown from
+   off-stage does; clipped to the box it would read as a grey panel with a
+   corner cut off. It is `pointer-events: none` and cannot be scrolled to, so
+   nothing is reachable out there. */
 .talks {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 32px;
   max-width: 900px;
+  isolation: isolate;
+}
+
+/* Everything the section actually says, over the light rather than in it. */
+.talks > *:not(.spotlight) {
+  position: relative;
+  z-index: 1;
 }
 
 /* Quiet, like the heads over `Creed` and the wishes. The section's first real
@@ -2034,7 +2128,7 @@ html {
 .talks__stack {
   display: flex;
   flex-direction: column;
-  /* The same 12px as `.why__stack` and `.creed__stack`: several of these wrap on
+  /* The same 12px as `.creed__stack`: several of these wrap on
      a narrow screen, and a gap under the line-height stops reading as the break
      between two sentences. */
   gap: 12px;
@@ -2058,7 +2152,7 @@ html {
 }
 
 /* What the whole section adds up to, at the weight the page gives its turns.
-   See `.why__turn` and `.creed__turn`. */
+   See `.creed__turn`. */
 .talks__turn {
   margin: 4px 0 0;
   max-width: 26ch;
@@ -2517,15 +2611,14 @@ html {
 }
 
 /* The whole section is one centred column: the question, the answer found under
-   it, and the two paragraphs that spell both out. Left-aligned prose starting at
+   it, and the paragraph that spells both out. Left-aligned prose starting at
    the page margin under a panel whose text is centred read as two sections
    stacked rather than as one thought carried on.
  *
- * `margin-inline` has to be said out loud: `.section__lede` and `.section__body`
- * both set `margin: 0 0 …`, which zeroes the inline margins, and a capped block
- * cannot centre without them back. */
-.live .section__lede,
-.live .section__body {
+ * `margin-inline` has to be said out loud: `.section__lede` sets `margin: 0 0 …`,
+ * which zeroes the inline margins, and a capped block cannot centre without them
+ * back. */
+.live .section__lede {
   margin-inline: auto;
   text-align: center;
   /* Centred ragged text strands a short last line in the middle of the column,

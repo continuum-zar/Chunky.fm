@@ -11,7 +11,10 @@ import { GlareCard } from './GlareCard.js'
 import { Globe } from './Globe.js'
 import { Gramophone } from './Gramophone.js'
 import { ResizableNavbar } from './ResizableNavbar.js'
+import { Spotlight } from './Spotlight.js'
 import { SquigglyText } from './SquigglyText.js'
+import { Timeline } from './Timeline.js'
+import { TracingBeam } from './TracingBeam.js'
 import { InfiniteMovingCards } from './InfiniteMovingCards.js'
 import { ListenerView } from './ListenerView.js'
 import { NextSession } from './NextSession.js'
@@ -73,7 +76,6 @@ export function Landing() {
             because a poster is for the people who have not been let in. */}
         <NextSession />
         <Moment />
-        <Why />
         <Creed />
         <Works />
         <Guide />
@@ -255,10 +257,6 @@ const Moment = memo(function Moment() {
             <li>No shuffle.</li>
             <li>No algorithm.</li>
           </ul>
-          <p className="moment__tail">
-            One room, one song, one instant. Arrive at 2:43 and you arrive at 2:43, not near it,
-            not a few seconds behind it.
-          </p>
         </div>
       </div>
 
@@ -305,120 +303,82 @@ const Moment = memo(function Moment() {
 })
 
 /**
- * Why it exists.
+ * What is wrong, and what the station is for. One section, not two.
  *
- * The only section on the page with no interface in it, and no numbers. It is
- * also the only one making an argument rather than a description, so it is set
- * large and given a screen to itself.
+ * This used to be two consecutive screens: `Why` (the case against the
+ * algorithm) and `Creed` (the philosophy), in the same first-person voice and
+ * the same setting, arguing the same thing at two different lengths. Read one
+ * after the other they were not two halves of an argument, they were the
+ * argument and then the argument again, and the second one was better. So the
+ * general claim keeps its opening line and the rest of it goes: everything
+ * `Why` spent eleven lines arriving at is said here in two, and this half has
+ * the only concrete thing either of them had.
  *
- * The argument is built rather than stated: a claim, then the things that are
- * true about streaming and are not the complaint, then the turn, then what was
- * actually lost, then the verdict. One thought a line, the same setting as the
- * DJ's own lines at the bottom of the page, because this section is the same
- * voice making the case the station is an answer to.
+ * Between `Moment` and `Works`, which is the order the page argues in: here is
+ * the thing, here is why it should exist, and only then here is how an evening
+ * runs. Put after `Works` it would be a philosophy appended to a product; put
+ * here it is the reason the product is shaped the way the next section shows.
  *
- * The lines come in groups and the groups are what the spacing is for. Four
- * facts about streaming are one breath and are set as one; the three things we
- * lost are another. Spaced evenly they would read as eleven unrelated
- * statements, which is a list rather than an argument.
- */
-const Why = memo(function Why() {
-  return (
-    <section className="why">
-      {/* One word wriggles, and it is the word the section is against: this is a
-          page that does not trust `optimizing`, and a word that will not hold
-          still is that said before the sentence gets to it. Squiggling the whole
-          line would just be a wobbly headline. */}
-      <p className="why__line">
-        We stopped discovering music. We started <SquigglyText>optimizing</SquigglyText> it.
-      </p>
-
-      <div className="why__stack">
-        <p className="why__line why__line--quiet">Millions of songs.</p>
-        <p className="why__line why__line--quiet">Millions of playlists.</p>
-        <p className="why__line why__line--quiet">Recommendations tailored to your history.</p>
-        <p className="why__line why__line--quiet">Streaming made music instantly accessible.</p>
-      </div>
-
-      <p className="why__line why__line--mid">
-        But somewhere along the way, we lost the people who helped us understand it.
-      </p>
-
-      <div className="why__stack">
-        <p className="why__line why__line--quiet">The DJs who surprised us.</p>
-        <p className="why__line why__line--quiet">The stories behind the records.</p>
-        <p className="why__line why__line--quiet">
-          The feeling of staying up because you didn’t know what was coming next.
-        </p>
-      </div>
-
-      <div className="why__stack">
-        <p className="why__line why__line--mid">
-          Algorithms are great at finding music you’ll probably like.
-        </p>
-        <p className="why__line why__line--mid">
-          They rarely introduce you to music that changes you.
-        </p>
-      </div>
-
-      <p className="why__turn">chunky.fm puts the room back.</p>
-    </section>
-  )
-})
-
-/**
- * What the station is actually for.
- *
- * Straight after `Why` and before `Works`, which is the order the argument
- * happens in: here is what is wrong, here is what I think about it, and only
- * then here is the machine. Put after `Works` it would be a philosophy appended
- * to a product; put here it is the reason the product is shaped the way the next
- * section shows.
- *
- * It is the second section in the first person, and the only one before the
- * bottom of the page. That is not the same as the DJ introducing himself; see
- * `Dj`, which is deliberately last but one and is a person saying who they are.
- * This is an argument that happens to be told through something that happened to
- * somebody, which is a different thing and can be read by a stranger.
+ * It is the first section in the first person, and the only one before the
+ * bottom of the page. That is not the DJ introducing himself; see `Dj`, which is
+ * deliberately last but one and is a person saying who they are. This is an
+ * argument that happens to be told through something that happened to somebody,
+ * which is a different thing and can be read by a stranger.
  *
  * The record is not chosen at random. Pink Floyd's Wish You Were Here is the
  * session this whole page is scrubbing through (see SESSION in session.ts)
  * so the album named as the thing somebody once explained is the album playing
  * along the bottom of the screen while you read about it.
  *
- * Set like `Why`: one thought a line, in groups, with the spacing doing the
- * work. The thesis, then what happened, then what was said, then what changed,
- * then the one line that is about the station.
+ * One thought a line, in groups, with the spacing doing the work. The claim,
+ * the thesis, what happened, what was said, what changed, and then the one line
+ * that is about the station.
  */
 const Creed = memo(function Creed() {
   return (
     <section className="creed">
       <h2 className="section__title section__title--quiet">The philosophy</h2>
 
-      <div className="creed__stack">
-        <p className="creed__line">Some songs don’t need better recommendations.</p>
-        <p className="creed__line">They need better introductions.</p>
-      </div>
-
-      <div className="creed__stack">
-        <p className="creed__said">
-          I didn’t fall in love with Pink Floyd because an algorithm recommended them.
+      {/* A line drawn down the margin as far as the reader has got. See
+          `TracingBeam`. It is here rather than anywhere else on the page because
+          this section is the one continuous argument on it: five groups that
+          only work read in order, and a line being drawn beside them is that
+          said without a word. Anywhere the page is making a list instead, the
+          same beam would be claiming a thread that is not there. */}
+      <TracingBeam className="creed__beam">
+        <p className="creed__claim">
+          {/* One word wriggles, and it is the word the section is against: this
+              is a page that does not trust `optimizing`, and a word that will
+              not hold still is that said before the sentence gets to it.
+              Squiggling the whole line would just be a wobbly headline. */}
+          We stopped discovering music. We started <SquigglyText>optimizing</SquigglyText> it.
         </p>
-        <p className="creed__said">I fell in love because someone explained who they were.</p>
-      </div>
 
-      <div className="creed__stack">
-        <p className="creed__said creed__said--quiet">The philosophy behind their albums.</p>
-        <p className="creed__said creed__said--quiet">The loss of Syd Barrett.</p>
-        <p className="creed__said creed__said--quiet">The choices hidden inside the music.</p>
-      </div>
+        <div className="creed__stack">
+          <p className="creed__line">Some songs don’t need better recommendations.</p>
+          <p className="creed__line">They need better introductions.</p>
+        </div>
 
-      <div className="creed__stack">
-        <p className="creed__said">When I listened again, I wasn’t hearing different sounds.</p>
-        <p className="creed__said">I was hearing different meaning.</p>
-      </div>
+        <div className="creed__stack">
+          <p className="creed__said">
+            I didn’t fall in love with Pink Floyd because an algorithm recommended them.
+          </p>
+          <p className="creed__said">I fell in love because someone explained who they were.</p>
+        </div>
 
-      <p className="creed__turn">That’s what chunky.fm is built to do.</p>
+        <div className="creed__stack">
+          <p className="creed__said creed__said--quiet">The philosophy behind their albums.</p>
+          <p className="creed__said creed__said--quiet">The loss of Syd Barrett.</p>
+          <p className="creed__said creed__said--quiet">The choices hidden inside the music.</p>
+        </div>
+
+        <div className="creed__stack">
+          <p className="creed__said">When I listened again, I wasn’t hearing different sounds.</p>
+          <p className="creed__said">I was hearing different meaning.</p>
+        </div>
+
+        <p className="creed__turn">That’s what chunky.fm is built to do.</p>
+      </TracingBeam>
     </section>
   )
 })
@@ -426,11 +386,18 @@ const Creed = memo(function Creed() {
 /**
  * What a session is, in five steps.
  *
- * Each one is a heading and then the same shape under it: a few fragments, and
- * then the line that says what they were for. It is the setting `Why` and
- * `Creed` use, applied five times. The page has settled on one thought a line
- * for anything that is an argument rather than a description, and this is the
+ * Each one is a heading and a few fragments under it. It is the setting `Creed`
+ * uses, applied five times. The page has settled on one thought a line for
+ * anything that is an argument rather than a description, and this is the
  * argument for the shape of an evening rather than a description of a feature.
+ *
+ * Each step used to close with a line saying what its fragments were for, and
+ * every one of those lines is said better elsewhere on the page: step 3's was
+ * `Moment`, step 4's was `Guide`, step 5's was `Creed`, and step 2's was the
+ * heading standing directly over the row. A card that states its own moral is
+ * the page reading itself out, and five of them in a row is why this section
+ * felt like homework. The heading carries the step; the fragments are what it
+ * is made of; nothing here needs a verdict under it.
  */
 const STEPS = [
   {
@@ -444,12 +411,10 @@ const STEPS = [
   {
     title: 'I curate the journey.',
     lines: ['Hours of listening.', 'Research.', 'Context.'],
-    close: ['The goal isn’t to build a playlist.', 'It’s to build a narrative.'],
   },
   {
     title: 'We listen together.',
     lines: ['One room.', 'One broadcast.', 'One timeline.'],
-    close: ['Everyone arrives at the same second of the same song.'],
   },
   {
     title: 'Follow the Listening Guide.',
@@ -459,15 +424,10 @@ const STEPS = [
       'Why a guitar solo hurts.',
       'Why this song comes before the next one.',
     ],
-    close: [
-      'The guide doesn’t tell you what to think.',
-      'It points you toward things worth noticing.',
-    ],
   },
   {
     title: 'Leave with something.',
     lines: ['Export the playlist.', 'Keep the annotations.', 'Take your own notes.'],
-    close: ['You’ll hear those songs differently long after the session ends.'],
   },
 ]
 
@@ -480,12 +440,9 @@ const STEPS = [
  * in, a row keeps the order that a reflowing grid would quietly lose by putting
  * step 4 under step 1.
  *
- * The card is bigger than it was, and had to be. These steps are five to seven
- * lines where the old ones were one sentence, and at the 268×331 the row used
- * before, step 04 came to about 285px of the 281px a card actually has inside
- * its padding, so it overflowed by a hair, which is the worst amount to overflow
- * by because it looks like a rendering fault rather than a decision. The card is
- * 320 wide and 3:4 now, and the longest step sits at a little over half of it.
+ * The card is up to 320 wide and has no ratio: the row is a flex row and every
+ * card comes out as tall as the tallest, so the shape follows the longest step
+ * rather than being declared. See `.scroller__item` in landing.css.
  */
 const Works = memo(function Works() {
   return (
@@ -524,16 +481,6 @@ const Works = memo(function Works() {
                   <p className="step__like">“{step.like[1]}”</p>
                 </div>
               ) : null}
-
-              {step.close ? (
-                <div className="step__stack">
-                  {step.close.map((line) => (
-                    <p className="step__close" key={line}>
-                      {line}
-                    </p>
-                  ))}
-                </div>
-              ) : null}
             </GlareCard>
           ),
         }))}
@@ -570,6 +517,11 @@ const NOTES = [
  * The timestamps are not `aria-hidden`, unlike every other clock on this page.
  * The others are pictures of a playhead; these are the content, and a note without
  * the second it belongs to is a different and much worse thing.
+ *
+ * The notes are on a rail rather than in a list. See `Timeline`: they were
+ * always three positions in a record and an `ol` is the one shape that says
+ * they are in order without saying they are at points, which is half of what a
+ * listening note is.
  */
 const Guide = memo(function Guide() {
   return (
@@ -585,14 +537,7 @@ const Guide = memo(function Guide() {
 
       <p className="guide__label">Example</p>
 
-      <ol className="guide__notes">
-        {NOTES.map((note) => (
-          <li className="note" key={note.at}>
-            <span className="note__at">{note.at}</span>
-            <span className="note__says">{note.says}</span>
-          </li>
-        ))}
-      </ol>
+      <Timeline className="guide__rail" items={NOTES} />
     </section>
   )
 })
@@ -630,24 +575,18 @@ function Room({ at }: { at: number }) {
           the talking is for before it shows any of it. The claim is not that
           people talk during the music; it is that there is only one point in the
           record for all of them, which is what makes a sentence about the next
-          eight bars worth typing at all. */}
+          eight bars worth typing at all.
+
+          Two stacks, where there were four. The two that went were the worked
+          examples — somebody calling the second guitar, the room going quiet —
+          and both of them are demonstrated rather than described a few inches
+          below, in a panel that fills with the room saying exactly that kind of
+          thing as you scroll. Telling a reader what they are about to be shown
+          is the one thing this section can afford least. */}
       <div className="room__creed">
         <div className="room__stack">
           <p className="room__line">You’re not listening beside people.</p>
           <p className="room__line room__line--said">You’re listening with them.</p>
-        </div>
-
-        <div className="room__stack">
-          <p className="room__line">When someone says:</p>
-          <p className="room__quote">“Wait for the second guitar…”</p>
-          <p className="room__line room__line--said">Everyone hears it together.</p>
-        </div>
-
-        <div className="room__stack">
-          <p className="room__line">When the room goes quiet…</p>
-          <p className="room__line room__line--said">
-            Everyone experiences that silence together.
-          </p>
         </div>
 
         <div className="room__stack">
@@ -831,6 +770,12 @@ function TalkPanel({ at }: { at: number }) {
 const Talks = memo(function Talks() {
   return (
     <section className="talks" id="talks">
+      {/* A light thrown across the section from off the top corner. See
+          `Spotlight`. This is the section about somebody being brought up onto
+          the air while the room listens in, and a light on whoever is talking
+          is what that looks like in every room it has ever happened in. */}
+      <Spotlight />
+
       <h2 className="section__title talks__title">Not only records</h2>
 
       <div className="talks__stack">
@@ -859,15 +804,16 @@ const Talks = memo(function Talks() {
       <p className="talks__turn">Music, ideas, and the people behind them.</p>
 
       {/* The plainest words on the page, and set that way on purpose: the rest
-          of this section argues, and this one just says what the thing is. */}
+          of this section argues, and this one just says what the thing is.
+
+          One line, where there were three. The first of them opened "an
+          independent project exploring music, ideas and the people behind
+          them", which is the turn directly above it said again in longer words,
+          and the other two are one thought that was punctuated as two. */}
       <div className="talks__note">
         <p>
-          chunky.fm is an independent project exploring music, ideas and the people behind them.
-        </p>
-        <p>It’s still early, which is part of the point.</p>
-        <p>
-          I’m interested in building a place where interesting conversations can happen without
-          everything needing to become content.
+          It’s still early, which is part of the point: a place where interesting conversations can
+          happen without everything needing to become content.
         </p>
       </div>
     </section>
@@ -903,17 +849,15 @@ const Wishes = memo(function Wishes() {
           eye. */}
       <h2 className="section__title section__title--quiet">What the room asks for</h2>
 
+      {/* Two stacks said this: "Ask for a feeling. / Not a song." and "Instead
+          of searching for tracks… / Describe the moment." They are the same
+          instruction twice, and the wall underneath demonstrates it better than
+          either. One line, and on to the half that is not obvious. */}
       <div className="wishes__stack">
-        <p className="wishes__line wishes__line--said">Ask for a feeling.</p>
-        <p className="wishes__line">Not a song.</p>
+        <p className="wishes__line wishes__line--said">Ask for a feeling, not a song.</p>
       </div>
 
-      <div className="wishes__stack">
-        <p className="wishes__line">Instead of searching for tracks…</p>
-        <p className="wishes__line wishes__line--said">Describe the moment.</p>
-      </div>
-
-      {/* The honest half, and the reason the section exists. Everything above is
+      {/* The honest half, and the reason the section exists. The line above is
           about what you may ask; this is about what happens to it, which on any
           other music page is a queue and here is a person reading it. */}
       <div className="wishes__stack">
@@ -959,8 +903,14 @@ function WishWall() {
  *
  * The question every page like this forgets: what stops me just playing the same
  * songs tomorrow. The answer is not a feature, so this section has no cards in
- * it, and the honest half of the answer is the second paragraph, which is that
- * the station is often not on.
+ * it and now has nothing under the mask but the one paragraph that answers it.
+ *
+ * It used to carry a second paragraph, on the station being off more often than
+ * it is on. That is worth admitting to and is still admitted to, in `Call`, in
+ * three short sentences at the point where somebody is deciding whether to press
+ * the button — which is the only place the state of the station is actually
+ * load-bearing. Said here as well it was a fifth paragraph in a row about the
+ * same evening, and it took the section away from the question it is named for.
  *
  * The question is on a panel you have to look under. Aceternity UI's SVG Mask
  * Effect (see `MaskContainer`) with the section's own two lines in it: the
@@ -1001,13 +951,6 @@ const Live = memo(function Live() {
       <p className="section__lede live__after">
         You can. You would hear the same notes and none of the evening: nobody going quiet at the
         same moment as you, nobody asking for the next one, nothing at stake in a song ending.
-        Playing a record is not the thing.
-      </p>
-      <p className="section__body">
-        Which is also why it is not always on. The station is on because somebody started it and
-        off because they ended it, and when the decks stop the record on every listener’s page
-        stops with them. <em>Off air</em> is a state this page is willing to admit to. You may
-        well arrive and find nothing playing, and it will say so rather than pretending.
       </p>
     </section>
   )
